@@ -78,8 +78,17 @@ fn linux_command_wraps_shell_script_when_requested() {
         .map(|value| value.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
-    assert!(argv.iter().any(|value| value == "sh"));
-    assert!(argv.iter().any(|value| value == "-lc"));
+    assert_eq!(
+        argv,
+        vec![
+            "systemd-run".to_string(),
+            "--user".to_string(),
+            "--scope".to_string(),
+            "sh".to_string(),
+            "-lc".to_string(),
+            "echo ok".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -93,9 +102,9 @@ fn linux_detect_reports_missing_systemd_run() {
     assert_eq!(report.platform, Platform::Linux);
     assert_eq!(report.backend, BackendKind::LinuxSystemd);
     assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
-    assert_eq!(report.cpu, CapabilityLevel::Enforced);
-    assert_eq!(report.memory, CapabilityLevel::Enforced);
-    assert_eq!(report.interactive, CapabilityLevel::Enforced);
+    assert_eq!(report.cpu, CapabilityLevel::Unavailable);
+    assert_eq!(report.memory, CapabilityLevel::Unavailable);
+    assert_eq!(report.interactive, CapabilityLevel::Unavailable);
     assert!(
         report
             .warnings
@@ -136,7 +145,7 @@ fn linux_detect_reports_missing_cgroup_v2() {
     assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
     assert_eq!(report.cpu, CapabilityLevel::Unavailable);
     assert_eq!(report.memory, CapabilityLevel::Unavailable);
-    assert_eq!(report.interactive, CapabilityLevel::Enforced);
+    assert_eq!(report.interactive, CapabilityLevel::Unavailable);
     assert!(
         report
             .warnings
@@ -154,8 +163,8 @@ fn linux_detect_reports_missing_user_manager() {
     });
 
     assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
-    assert_eq!(report.cpu, CapabilityLevel::Enforced);
-    assert_eq!(report.memory, CapabilityLevel::Enforced);
+    assert_eq!(report.cpu, CapabilityLevel::Unavailable);
+    assert_eq!(report.memory, CapabilityLevel::Unavailable);
     assert_eq!(report.interactive, CapabilityLevel::Unavailable);
     assert!(
         report

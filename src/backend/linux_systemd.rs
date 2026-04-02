@@ -64,27 +64,9 @@ pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>
 
 pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityReport {
     let mut warnings = Vec::new();
-
-    let backend_state =
-        if probe.has_systemd_run && probe.has_cgroup_v2 && probe.user_manager_reachable {
-            CapabilityLevel::Enforced
-        } else {
-            CapabilityLevel::Unavailable
-        };
-
-    let cpu = if probe.has_cgroup_v2 {
-        CapabilityLevel::Enforced
-    } else {
-        CapabilityLevel::Unavailable
-    };
-
-    let memory = if probe.has_cgroup_v2 {
-        CapabilityLevel::Enforced
-    } else {
-        CapabilityLevel::Unavailable
-    };
-
-    let interactive = if probe.user_manager_reachable {
+    let all_prerequisites_satisfied =
+        probe.has_systemd_run && probe.has_cgroup_v2 && probe.user_manager_reachable;
+    let enforced_when_ready = if all_prerequisites_satisfied {
         CapabilityLevel::Enforced
     } else {
         CapabilityLevel::Unavailable
@@ -105,10 +87,10 @@ pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityRe
     crate::core::CapabilityReport {
         platform: Platform::Linux,
         backend: BackendKind::LinuxSystemd,
-        backend_state,
-        cpu,
-        memory,
-        interactive,
+        backend_state: enforced_when_ready,
+        cpu: enforced_when_ready,
+        memory: enforced_when_ready,
+        interactive: enforced_when_ready,
         warnings,
     }
 }
