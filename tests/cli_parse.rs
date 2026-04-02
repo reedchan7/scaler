@@ -1,5 +1,7 @@
+use clap::error::ErrorKind;
 use scaler::cli::values::{CpuLimit, MemoryLimit};
-use scaler::cli::{args::Cli, parse_from};
+use scaler::cli::{args::Cli, normalize_argv, parse_from};
+use std::ffi::OsString;
 
 #[test]
 fn parses_decimal_cpu_limit() {
@@ -40,6 +42,58 @@ fn shorthand_run_rewrites_without_guessing_shell() {
     ])
     .unwrap();
     assert_eq!(cli.command_name(), "run");
+}
+
+#[test]
+fn normalize_argv_only_rewrites_literal_delimiter_form() {
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("--help")]),
+        vec![OsString::from("scaler"), OsString::from("--help")]
+    );
+    assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("--version")]),
+        vec![OsString::from("scaler"), OsString::from("--version")]
+    );
+    assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("foo")]),
+        vec![OsString::from("scaler"), OsString::from("foo")]
+    );
+}
+
+#[test]
+fn top_level_help_version_and_unknown_command_keep_clap_behavior() {
+    let help = parse_from(vec!["scaler".into(), "--help".into()]).unwrap_err();
+    assert_eq!(
+        help.downcast_ref::<clap::Error>().unwrap().kind(),
+        ErrorKind::DisplayHelp
+    );
+
+    let version = parse_from(vec!["scaler".into(), "--version".into()]).unwrap_err();
+    assert_eq!(
+        version.downcast_ref::<clap::Error>().unwrap().kind(),
+        ErrorKind::DisplayVersion
+    );
+
+    let unknown = parse_from(vec!["scaler".into(), "foo".into()]).unwrap_err();
+    assert_eq!(
+        unknown.downcast_ref::<clap::Error>().unwrap().kind(),
+        ErrorKind::InvalidSubcommand
+    );
 }
 
 #[test]

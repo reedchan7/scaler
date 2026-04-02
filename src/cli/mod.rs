@@ -12,14 +12,23 @@ pub fn normalize_argv(raw: Vec<OsString>) -> Vec<OsString> {
     }
 
     let first = raw[1].as_os_str();
-    if matches!(first, s if s == OsStr::new("run") || s == OsStr::new("doctor") || s == OsStr::new("version"))
-    {
+    if matches!(
+        first,
+        s if s == OsStr::new("--help")
+            || s == OsStr::new("-h")
+            || s == OsStr::new("--version")
+            || s == OsStr::new("-V")
+    ) {
         return raw;
     }
 
-    let mut normalized = raw;
-    normalized.insert(1, OsString::from("run"));
-    normalized
+    if first == OsStr::new("--") || first.to_string_lossy().starts_with('-') {
+        let mut normalized = raw;
+        normalized.insert(1, OsString::from("run"));
+        return normalized;
+    }
+
+    raw
 }
 
 pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {

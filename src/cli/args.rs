@@ -3,7 +3,7 @@ use clap::{ArgAction, CommandFactory, Parser, error::ErrorKind};
 use crate::cli::values::{CpuLimit, MemoryLimit};
 
 #[derive(Parser, Debug)]
-#[command(name = "scaler")]
+#[command(name = "scaler", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
