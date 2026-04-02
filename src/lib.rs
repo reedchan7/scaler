@@ -24,14 +24,24 @@ pub fn run() -> anyhow::Result<()> {
 
     match cli.command {
         crate::cli::args::Command::Doctor => {
-            let report = crate::core::CapabilityReport::unsupported();
+            let report = crate::backend::detect_host_capabilities();
             println!("platform: {}", report.platform.as_str());
             println!("backend: {}", report.backend.as_str());
             println!("backend_state: {}", report.backend_state.as_str());
             println!("cpu: {}", report.cpu.as_str());
             println!("memory: {}", report.memory.as_str());
             println!("interactive: {}", report.interactive.as_str());
-            println!("prerequisite: no supported backend for this host");
+
+            if report.warnings.is_empty() {
+                if report.platform == crate::core::Platform::Unsupported {
+                    println!("prerequisite: no supported backend for this host");
+                }
+            } else {
+                for warning in report.warnings {
+                    println!("prerequisite: {warning}");
+                }
+            }
+
             Ok(())
         }
         crate::cli::args::Command::Version => {
