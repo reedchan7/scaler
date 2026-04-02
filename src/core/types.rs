@@ -57,8 +57,8 @@ pub enum BackendKind {
 impl BackendKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::LinuxSystemd => "linux-systemd",
-            Self::MacosTaskpolicy => "macos-taskpolicy",
+            Self::LinuxSystemd => "linux_systemd",
+            Self::MacosTaskpolicy => "macos_taskpolicy",
             Self::Unsupported => "unsupported",
         }
     }
@@ -165,6 +165,58 @@ impl CapabilityReport {
             interactive: CapabilityLevel::Unavailable,
             warnings: Vec::new(),
         }
+    }
+
+    pub fn prerequisite_lines(&self) -> Vec<String> {
+        match self.platform {
+            Platform::Linux => vec![
+                format!(
+                    "cgroup_v2={}",
+                    if self.has_warning_containing("unified cgroup v2") {
+                        "missing"
+                    } else {
+                        "ok"
+                    }
+                ),
+                format!(
+                    "user_manager={}",
+                    if self.has_warning_containing("systemd user manager") {
+                        "unreachable"
+                    } else {
+                        "ok"
+                    }
+                ),
+            ],
+            Platform::Macos => vec![
+                format!(
+                    "taskpolicy={}",
+                    if self.has_warning_containing("taskpolicy is not available in PATH") {
+                        "missing"
+                    } else {
+                        "ok"
+                    }
+                ),
+                format!(
+                    "platform_version={}",
+                    if self.has_warning_containing("platform version is not supported") {
+                        "unsupported"
+                    } else {
+                        "ok"
+                    }
+                ),
+            ],
+            Platform::Unsupported => vec!["no supported backend for this host".to_string()],
+        }
+    }
+
+    pub fn sorted_warnings(&self) -> Vec<&str> {
+        let mut warnings = self.warnings.iter().map(String::as_str).collect::<Vec<_>>();
+        warnings.sort_unstable();
+        warnings
+    }
+
+    fn has_warning_containing(&self, needle: &str) -> bool {
+        self.warnings.iter().any(|warning| warning.contains(needle))
     }
 }
 

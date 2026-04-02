@@ -47,3 +47,29 @@ pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {
     let normalized = normalize_argv(raw);
     Ok(Cli::try_parse_from(normalized)?)
 }
+
+pub fn render_doctor_output(report: &crate::core::CapabilityReport) -> String {
+    let mut lines = vec![
+        format!("platform: {}", report.platform.as_str()),
+        format!("backend: {}", report.backend.as_str()),
+        format!("backend_state: {}", report.backend_state.as_str()),
+        format!("cpu: {}", report.cpu.as_str()),
+        format!("memory: {}", report.memory.as_str()),
+        format!("interactive: {}", report.interactive.as_str()),
+    ];
+
+    lines.extend(
+        report
+            .prerequisite_lines()
+            .into_iter()
+            .map(|prerequisite| format!("prerequisite: {prerequisite}")),
+    );
+    lines.extend(
+        report
+            .sorted_warnings()
+            .into_iter()
+            .map(|warning| format!("warning: {warning}")),
+    );
+
+    lines.join("\n")
+}

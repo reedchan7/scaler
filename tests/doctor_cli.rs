@@ -3,36 +3,41 @@ use assert_cmd::Command;
 #[test]
 fn doctor_prints_capability_states() {
     let stdout = doctor_stdout();
+    let lines = stdout.lines().collect::<Vec<_>>();
+
     if cfg!(target_os = "linux") {
-        let lines = stdout.lines().collect::<Vec<_>>();
-
-        assert!(lines.len() >= 6);
-        assert_eq!(lines[0], "platform: linux");
-        assert_eq!(lines[1], "backend: linux-systemd");
-        assert!(lines[2].starts_with("backend_state: "));
-        assert!(lines[3].starts_with("cpu: "));
-        assert!(lines[4].starts_with("memory: "));
-        assert!(lines[5].starts_with("interactive: "));
-        assert!(
-            lines[6..]
-                .iter()
-                .all(|line| line.starts_with("prerequisite: "))
+        assert_core_lines(
+            &lines,
+            &[
+                "platform: linux",
+                "backend: linux_systemd",
+                "backend_state: ",
+                "cpu: ",
+                "memory: ",
+                "interactive: ",
+            ],
         );
+        assert_eq!(lines[6], linux_prerequisite_line("cgroup_v2", &stdout));
+        assert_eq!(lines[7], linux_prerequisite_line("user_manager", &stdout));
+        assert_sorted_warning_lines(&lines[8..]);
     } else if cfg!(target_os = "macos") {
-        let lines = stdout.lines().collect::<Vec<_>>();
-
-        assert!(lines.len() >= 6);
-        assert_eq!(lines[0], "platform: macos");
-        assert_eq!(lines[1], "backend: macos-taskpolicy");
-        assert!(lines[2].starts_with("backend_state: "));
-        assert!(lines[3].starts_with("cpu: "));
-        assert!(lines[4].starts_with("memory: "));
-        assert!(lines[5].starts_with("interactive: "));
-        assert!(
-            lines[6..]
-                .iter()
-                .all(|line| line.starts_with("prerequisite: "))
+        assert_core_lines(
+            &lines,
+            &[
+                "platform: macos",
+                "backend: macos_taskpolicy",
+                "backend_state: ",
+                "cpu: ",
+                "memory: ",
+                "interactive: ",
+            ],
         );
+        assert_eq!(lines[6], macos_prerequisite_line("taskpolicy", &stdout));
+        assert_eq!(
+            lines[7],
+            macos_prerequisite_line("platform_version", &stdout)
+        );
+        assert_sorted_warning_lines(&lines[8..]);
     } else {
         let expected = concat!(
             "platform: unsupported\n",
@@ -63,11 +68,19 @@ fn doctor_uses_only_known_capability_words() {
 
     assert_eq!(capability_values.len(), 4);
     assert!(capability_values.iter().all(|value| known.contains(value)));
+    assert!(stdout.lines().all(|line| !line.trim().is_empty()));
     assert!(
         stdout
             .lines()
-            .filter(|line| line.starts_with("prerequisite: "))
-            .all(|line| !line.trim().is_empty())
+            .any(|line| line.starts_with("prerequisite: "))
+    );
+    assert!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("warning: "))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1])
     );
 }
 
@@ -80,4 +93,51 @@ fn doctor_stdout() -> String {
 
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn assert_core_lines(lines: &[&str], expected: &[&str; 6]) {
+    assert!(lines.len() >= 8);
+    assert_eq!(lines[0], expected[0]);
+    assert_eq!(lines[1], expected[1]);
+    assert!(lines[2].starts_with(expected[2]));
+    assert!(lines[3].starts_with(expected[3]));
+    assert!(lines[4].starts_with(expected[4]));
+    assert!(lines[5].starts_with(expected[5]));
+}
+
+fn assert_sorted_warning_lines(lines: &[&str]) {
+    assert!(lines.iter().all(|line| line.starts_with("warning: ")));
+    assert!(lines.windows(2).all(|pair| pair[0] <= pair[1]));
+}
+
+fn linux_prerequisite_line(key: &str, stdout: &str) -> String {
+    let status = match key {
+        "cgroup_v2" if stdout.contains("warning: unified cgroup v2 is not available") => "missing",
+        "user_manager" if stdout.contains("warning: systemd user manager is unreachable") => {
+            "unreachable"
+        }
+        "cgroup_v2" | "user_manager" => "ok",
+        _ => unreachable!(),
+    };
+
+    format!("prerequisite: {key}={status}")
+}
+
+fn macos_prerequisite_line(key: &str, stdout: &str) -> String {
+    let status = match key {
+        "taskpolicy" if stdout.contains("warning: taskpolicy is not available in PATH") => {
+            "missing"
+        }
+        "platform_version"
+            if stdout.contains(
+                "warning: macOS platform version is not supported by the taskpolicy backend",
+            ) =>
+        {
+            "unsupported"
+        }
+        "taskpolicy" | "platform_version" => "ok",
+        _ => unreachable!(),
+    };
+
+    format!("prerequisite: {key}={status}")
 }
