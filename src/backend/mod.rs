@@ -1,7 +1,9 @@
-use crate::core::{CapabilityReport, LaunchPlan, RunningHandle, Sample, Signal};
+use crate::core::{CapabilityReport, InteractiveMode, LaunchPlan, RunningHandle, Sample, Signal};
 
 #[cfg(target_os = "linux")]
 pub mod linux_systemd;
+#[cfg(target_os = "macos")]
+pub mod macos_taskpolicy;
 
 pub trait Backend {
     fn detect(&self) -> CapabilityReport;
@@ -19,7 +21,16 @@ pub fn detect_host_capabilities() -> CapabilityReport {
     linux_systemd::detect_linux_capabilities(linux_systemd::probe_linux_host())
 }
 
+#[cfg(target_os = "macos")]
+pub fn detect_host_capabilities() -> CapabilityReport {
+    macos_taskpolicy::detect_macos_capabilities(
+        macos_taskpolicy::probe_macos_host(),
+        InteractiveMode::Auto,
+    )
+}
+
 #[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "macos"))]
 pub fn detect_host_capabilities() -> CapabilityReport {
     CapabilityReport::unsupported()
 }

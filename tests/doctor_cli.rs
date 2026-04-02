@@ -18,6 +18,21 @@ fn doctor_prints_capability_states() {
                 .iter()
                 .all(|line| line.starts_with("prerequisite: "))
         );
+    } else if cfg!(target_os = "macos") {
+        let lines = stdout.lines().collect::<Vec<_>>();
+
+        assert!(lines.len() >= 6);
+        assert_eq!(lines[0], "platform: macos");
+        assert_eq!(lines[1], "backend: macos-taskpolicy");
+        assert!(lines[2].starts_with("backend_state: "));
+        assert!(lines[3].starts_with("cpu: "));
+        assert!(lines[4].starts_with("memory: "));
+        assert!(lines[5].starts_with("interactive: "));
+        assert!(
+            lines[6..]
+                .iter()
+                .all(|line| line.starts_with("prerequisite: "))
+        );
     } else {
         let expected = concat!(
             "platform: unsupported\n",
