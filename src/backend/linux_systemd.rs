@@ -51,6 +51,8 @@ pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>
         argv.push(OsString::from("--property=MemorySwapMax=0"));
     }
 
+    argv.push(OsString::from("--"));
+
     match plan.resource_spec.shell {
         Some(shell) => {
             anyhow::ensure!(

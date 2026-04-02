@@ -46,6 +46,36 @@ mod linux_tests {
             argv.iter()
                 .any(|value| value == "--property=MemorySwapMax=0")
         );
+        let delimiter_index = argv.iter().position(|value| value == "--").unwrap();
+        assert_eq!(delimiter_index, 7);
+        assert_eq!(&argv[delimiter_index + 1..], ["echo", "ok"]);
+    }
+
+    #[test]
+    fn linux_command_preserves_dash_prefixed_executable_after_delimiter() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("-tool"), OsString::from("arg")],
+            resource_spec: ResourceSpec::default(),
+            platform: Platform::Linux,
+        };
+
+        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = argv
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            argv,
+            vec![
+                "systemd-run".to_string(),
+                "--user".to_string(),
+                "--scope".to_string(),
+                "--".to_string(),
+                "-tool".to_string(),
+                "arg".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -71,6 +101,7 @@ mod linux_tests {
                 "systemd-run".to_string(),
                 "--user".to_string(),
                 "--scope".to_string(),
+                "--".to_string(),
                 "sh".to_string(),
                 "-lc".to_string(),
                 "echo ok".to_string(),
