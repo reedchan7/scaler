@@ -96,10 +96,9 @@ impl RunCommand {
 }
 
 fn validation_error(kind: ErrorKind, message: &str) -> clap::Error {
-    let mut error = clap::Error::raw(kind, message);
-    error.insert(
-        clap::error::ContextKind::Usage,
-        clap::error::ContextValue::StyledStr(Cli::command().render_usage()),
-    );
-    error
+    let mut command = Cli::command();
+    command
+        .find_subcommand_mut("run")
+        .expect("run subcommand must exist")
+        .error(kind, message)
 }

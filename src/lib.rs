@@ -14,7 +14,8 @@ pub fn run() -> anyhow::Result<()> {
                     return Ok(());
                 }
 
-                return Err(clap_err.into());
+                clap_err.print()?;
+                std::process::exit(clap_err.exit_code());
             }
             Err(err) => return Err(err),
         },

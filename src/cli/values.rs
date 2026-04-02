@@ -11,7 +11,7 @@ const BYTES_PER_TIB: u64 = BYTES_PER_GIB * 1024;
 
 impl CpuLimit {
     pub fn parse(raw: &str) -> Result<Self> {
-        let normalized = raw.trim().to_ascii_lowercase();
+        let normalized = raw.to_ascii_lowercase();
         let number = normalized
             .strip_suffix('c')
             .ok_or_else(|| anyhow!("cpu limit must end with 'c'"))?;
@@ -29,7 +29,7 @@ impl CpuLimit {
 
 impl MemoryLimit {
     pub fn parse(raw: &str) -> Result<Self> {
-        let normalized = raw.trim().to_ascii_lowercase();
+        let normalized = raw.to_ascii_lowercase();
         let (number, unit) = normalized.split_at(
             normalized
                 .len()

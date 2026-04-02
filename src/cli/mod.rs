@@ -22,20 +22,25 @@ pub fn normalize_argv(raw: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn is_run_shorthand_flag(value: &OsStr) -> bool {
-    matches!(
-        value,
-        s if s == OsStr::new("--cpu")
-            || s == OsStr::new("--mem")
-            || s == OsStr::new("--interactive")
-            || s == OsStr::new("--shell")
-            || s == OsStr::new("--no-monitor")
-    )
+    let value = value.to_string_lossy();
+    matches_flag(&value, "--cpu")
+        || matches_flag(&value, "--mem")
+        || matches_flag(&value, "--interactive")
+        || matches_flag(&value, "--shell")
+        || matches_flag(&value, "--no-monitor")
 }
 
 fn has_delimiter(values: &[OsString]) -> bool {
     values
         .iter()
         .any(|value| value.as_os_str() == OsStr::new("--"))
+}
+
+fn matches_flag(value: &str, flag: &str) -> bool {
+    value == flag
+        || value
+            .strip_prefix(flag)
+            .is_some_and(|suffix| suffix.starts_with('='))
 }
 
 pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {

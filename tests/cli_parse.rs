@@ -22,6 +22,12 @@ fn rejects_zero_cpu_limit() {
 }
 
 #[test]
+fn rejects_resource_values_with_outer_whitespace() {
+    assert!(CpuLimit::parse(" 1c ").is_err());
+    assert!(MemoryLimit::parse(" 1g ").is_err());
+}
+
+#[test]
 fn parses_decimal_memory_limit() {
     assert_eq!(MemoryLimit::parse("1.5g").unwrap().bytes(), 1610612736);
 }
@@ -85,6 +91,23 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
+            OsString::from("--cpu=1c"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--cpu=1c"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
             OsString::from("--cpu"),
             OsString::from("1c"),
         ]),
@@ -114,6 +137,21 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
+            OsString::from("--mem=1g"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--mem=1g"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
             OsString::from("--interactive"),
             OsString::from("never"),
             OsString::from("--"),
@@ -124,6 +162,21 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
             OsString::from("run"),
             OsString::from("--interactive"),
             OsString::from("never"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--interactive=never"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--interactive=never"),
             OsString::from("--"),
             OsString::from("echo"),
         ]
@@ -143,6 +196,36 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
             OsString::from("sh"),
             OsString::from("--"),
             OsString::from("echo ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--shell=sh"),
+            OsString::from("--"),
+            OsString::from("echo ok"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--shell=sh"),
+            OsString::from("--"),
+            OsString::from("echo ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--no-monitor=false"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--no-monitor=false"),
+            OsString::from("--"),
+            OsString::from("echo"),
         ]
     );
     assert_eq!(
@@ -238,6 +321,29 @@ fn binary_help_and_version_exit_successfully() {
         .assert()
         .success()
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn binary_validation_failures_render_clap_errors() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Usage: run"))
+        .stderr(predicate::str::contains(
+            "run requires at least one command token after `--`",
+        ));
+
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["run", "--shell", "sh", "--", "echo", "ok"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Usage: run"))
+        .stderr(predicate::str::contains(
+            "shell mode requires exactly one script token after `--`",
+        ));
 }
 
 #[test]
