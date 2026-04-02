@@ -130,7 +130,7 @@ fn plain_fallback_termination_targets_the_process_group() {
     script.flush().unwrap();
     let script_path = script.path().to_string_lossy().into_owned();
 
-    let backend = PlainFallbackBackend::default();
+    let backend = PlainFallbackBackend;
     let pidfile_for_interrupt = pidfile_path.clone();
     std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -260,7 +260,10 @@ fn host_platform() -> Platform {
 
 fn signal_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static SIGNAL_TEST_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    SIGNAL_TEST_GUARD.get_or_init(|| Mutex::new(())).lock().unwrap()
+    SIGNAL_TEST_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap()
 }
 
 fn resolved_code(status: ExitStatus) -> Option<i32> {
@@ -272,7 +275,7 @@ fn resolved_code(status: ExitStatus) -> Option<i32> {
     {
         use std::os::unix::process::ExitStatusExt;
 
-        return status.signal().map(|signal| 128 + signal);
+        status.signal().map(|signal| 128 + signal)
     }
 
     #[cfg(not(unix))]

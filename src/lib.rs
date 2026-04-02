@@ -31,13 +31,13 @@ pub fn run() -> anyhow::Result<()> {
         }
         crate::cli::args::Command::Run(run) => {
             let plan = build_launch_plan(run);
-            let backend = crate::core::run_loop::PlainFallbackBackend::default();
+            let backend = crate::core::run_loop::PlainFallbackBackend;
             let _signal_bridge = crate::core::run_loop::install_signal_bridge()?;
             let outcome = crate::core::run_loop::execute(plan, &backend)?;
-            if let Some(exit_code) = resolved_exit_code(&outcome.exit_status) {
-                if exit_code != 0 {
-                    std::process::exit(exit_code);
-                }
+            if let Some(exit_code) = resolved_exit_code(&outcome.exit_status)
+                && exit_code != 0
+            {
+                std::process::exit(exit_code);
             }
             Ok(())
         }
@@ -98,7 +98,7 @@ fn resolved_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
     {
         use std::os::unix::process::ExitStatusExt;
 
-        return status.signal().map(|signal| 128 + signal);
+        status.signal().map(|signal| 128 + signal)
     }
 
     #[cfg(not(unix))]

@@ -8,15 +8,9 @@ pub fn next_sequence(current: &mut u64) -> u64 {
     sequence
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct OutputCollector {
     next_sequence: u64,
-}
-
-impl Default for OutputCollector {
-    fn default() -> Self {
-        Self { next_sequence: 0 }
-    }
 }
 
 impl OutputCollector {

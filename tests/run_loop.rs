@@ -86,7 +86,7 @@ fn plain_fallback_executes_real_command_and_collects_output_frames() {
             },
             platform: host_platform(),
         },
-        &PlainFallbackBackend::default(),
+        &PlainFallbackBackend,
     )
     .unwrap();
 
@@ -215,7 +215,7 @@ fn final_summary_is_emitted_once_after_terminal_restore() {
             },
             platform: host_platform(),
         },
-        &PlainFallbackBackend::default(),
+        &PlainFallbackBackend,
     )
     .unwrap();
 
@@ -249,7 +249,7 @@ fn monitor_start_failure_falls_back_to_plain_streaming() {
             },
             platform: host_platform(),
         },
-        &PlainFallbackBackend::default(),
+        &PlainFallbackBackend,
     )
     .unwrap();
 
@@ -292,7 +292,7 @@ fn interactive_pty_uses_compact_mode() {
             },
             platform: host_platform(),
         },
-        &PlainFallbackBackend::default(),
+        &PlainFallbackBackend,
     )
     .unwrap();
 
@@ -335,7 +335,7 @@ fn monitor_failure_after_launch_restores_terminal_and_keeps_output_flowing() {
             },
             platform: host_platform(),
         },
-        &PlainFallbackBackend::default(),
+        &PlainFallbackBackend,
     )
     .unwrap();
 

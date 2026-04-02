@@ -80,7 +80,7 @@ struct SelectedExecution {
 #[derive(Debug)]
 enum ActiveUi {
     Plain(PlainRenderer),
-    Tui(TuiRenderer),
+    Tui(Box<TuiRenderer>),
 }
 
 impl ActiveUi {
@@ -138,7 +138,7 @@ impl UiSession {
                         record_event("compact_interactive_mode");
                     }
                     return Ok(Self {
-                        renderer: ActiveUi::Tui(renderer),
+                        renderer: ActiveUi::Tui(Box::new(renderer)),
                         base_context,
                         restored: false,
                     });

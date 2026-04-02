@@ -93,7 +93,7 @@ fn render_prerequisite_status(status: crate::core::PrerequisiteStatus) -> &'stat
     }
 }
 
-fn sorted_warning_lines<'a>(warnings: &'a [String]) -> Vec<&'a str> {
+fn sorted_warning_lines(warnings: &[String]) -> Vec<&str> {
     let mut warnings = warnings.iter().map(String::as_str).collect::<Vec<_>>();
     warnings.sort_unstable();
     warnings
