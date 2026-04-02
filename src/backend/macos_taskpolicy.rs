@@ -84,7 +84,7 @@ pub fn detect_macos_capabilities(
         warnings.push("taskpolicy memory support is unavailable on this host".to_string());
     }
 
-    if !probe.has_pty_support {
+    if !probe.has_pty_support && !matches!(interactive, InteractiveMode::Never) {
         warnings.push("PTY support is unavailable for interactive taskpolicy launches".into());
     }
 

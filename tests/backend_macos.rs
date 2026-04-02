@@ -138,6 +138,28 @@ mod macos_tests {
     }
 
     #[test]
+    fn macos_detect_omits_pty_warning_for_never_interactive_mode() {
+        let report = detect_macos_capabilities(
+            MacosProbe {
+                has_taskpolicy: true,
+                has_renice: true,
+                has_memory_support: true,
+                has_pty_support: false,
+                platform_version_supported: true,
+            },
+            InteractiveMode::Never,
+        );
+
+        assert_eq!(report.interactive, CapabilityLevel::BestEffort);
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("PTY"))
+        );
+    }
+
+    #[test]
     fn macos_detect_reports_unsupported_platform_version() {
         let report = detect_macos_capabilities(
             MacosProbe {
@@ -209,6 +231,52 @@ mod macos_tests {
         assert_eq!(
             &argv[argv.len() - 3..],
             ["sh".to_string(), "-lc".to_string(), "echo ok".to_string()]
+        );
+    }
+
+    #[test]
+    fn macos_command_rejects_multiple_shell_tokens() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo"), OsString::from("ok")],
+            resource_spec: ResourceSpec {
+                shell: Some(ShellKind::Sh),
+                ..ResourceSpec::default()
+            },
+            platform: Platform::Macos,
+        };
+
+        let error = build_taskpolicy_argv(&plan).unwrap_err().to_string();
+
+        assert!(error.contains("exactly one script token"));
+    }
+
+    #[test]
+    fn macos_command_preserves_dash_prefixed_executable_after_delimiter() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("-tool"), OsString::from("arg")],
+            resource_spec: ResourceSpec::default(),
+            platform: Platform::Macos,
+        };
+
+        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = argv
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            argv,
+            vec![
+                "taskpolicy".to_string(),
+                "-b".to_string(),
+                "-d".to_string(),
+                "throttle".to_string(),
+                "-g".to_string(),
+                "default".to_string(),
+                "--".to_string(),
+                "-tool".to_string(),
+                "arg".to_string(),
+            ]
         );
     }
 
