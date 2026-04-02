@@ -1,6 +1,7 @@
 use std::{
     env,
     ffi::OsString,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -142,7 +143,10 @@ fn find_in_path(program: &str) -> Option<PathBuf> {
 }
 
 fn is_executable(path: &Path) -> bool {
-    path.is_file()
+    match path.metadata() {
+        Ok(metadata) => metadata.is_file() && (metadata.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
 }
 
 fn probe_user_manager() -> bool {
@@ -153,5 +157,42 @@ fn probe_user_manager() -> bool {
     {
         Ok(status) => status.success(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::is_executable;
+
+    #[test]
+    fn is_executable_requires_execute_permissions() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("scaler-linux-systemd-{unique}"));
+        let candidate = temp_dir.join("systemd-run");
+
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::write(&candidate, b"#!/bin/sh\n").unwrap();
+
+        let mut permissions = fs::metadata(&candidate).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&candidate, permissions).unwrap();
+        assert!(!is_executable(&candidate));
+
+        let mut permissions = fs::metadata(&candidate).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&candidate, permissions).unwrap();
+        assert!(is_executable(&candidate));
+
+        fs::remove_file(&candidate).unwrap();
+        fs::remove_dir(&temp_dir).unwrap();
     }
 }
