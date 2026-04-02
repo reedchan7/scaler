@@ -1,175 +1,179 @@
-use std::ffi::OsString;
-
-#[cfg(not(target_os = "linux"))]
-mod core {
-    pub use scaler::core::*;
-}
-
-#[cfg(not(target_os = "linux"))]
-#[allow(dead_code)]
-#[path = "../src/backend/linux_systemd.rs"]
-mod linux_systemd;
-
 #[cfg(target_os = "linux")]
-use scaler::backend::linux_systemd::{
-    LinuxProbe, build_systemd_run_argv, detect_linux_capabilities,
-};
+mod linux_tests {
+    use std::ffi::OsString;
 
-#[cfg(not(target_os = "linux"))]
-use linux_systemd::{LinuxProbe, build_systemd_run_argv, detect_linux_capabilities};
-
-use scaler::core::{
-    BackendKind, CapabilityLevel, CpuLimit, InteractiveMode, LaunchPlan, MemoryLimit, Platform,
-    ResourceSpec, ShellKind,
-};
-
-#[test]
-fn linux_command_uses_scope_and_memory_mapping() {
-    let plan = LaunchPlan {
-        argv: vec![OsString::from("echo"), OsString::from("ok")],
-        resource_spec: ResourceSpec {
-            cpu: Some(CpuLimit::from_centi_cores(100)),
-            mem: Some(MemoryLimit::from_bytes(1_073_741_824)),
-            interactive: InteractiveMode::Never,
-            shell: None,
-            monitor: true,
+    use scaler::{
+        backend::linux_systemd::{LinuxProbe, build_systemd_run_argv, detect_linux_capabilities},
+        core::{
+            BackendKind, CapabilityLevel, CpuLimit, InteractiveMode, LaunchPlan, MemoryLimit,
+            Platform, ResourceSpec, ShellKind,
         },
-        platform: Platform::Linux,
     };
 
-    let argv = build_systemd_run_argv(&plan).unwrap();
-    let argv = argv
-        .iter()
-        .map(|value| value.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
+    #[test]
+    fn linux_command_uses_scope_and_memory_mapping() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo"), OsString::from("ok")],
+            resource_spec: ResourceSpec {
+                cpu: Some(CpuLimit::from_centi_cores(100)),
+                mem: Some(MemoryLimit::from_bytes(1_073_741_824)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: true,
+            },
+            platform: Platform::Linux,
+        };
 
-    assert_eq!(argv[0], "systemd-run");
-    assert!(argv.iter().any(|value| value == "--user"));
-    assert!(argv.iter().any(|value| value == "--scope"));
-    assert!(argv.iter().any(|value| value == "--property=CPUQuota=100%"));
-    assert!(
-        argv.iter()
-            .any(|value| value == "--property=MemoryHigh=966367642")
-    );
-    assert!(
-        argv.iter()
-            .any(|value| value == "--property=MemoryMax=1073741824")
-    );
-    assert!(
-        argv.iter()
-            .any(|value| value == "--property=MemorySwapMax=0")
-    );
-}
-
-#[test]
-fn linux_command_wraps_shell_script_when_requested() {
-    let plan = LaunchPlan {
-        argv: vec![OsString::from("echo ok")],
-        resource_spec: ResourceSpec {
-            shell: Some(ShellKind::Sh),
-            ..ResourceSpec::default()
-        },
-        platform: Platform::Linux,
-    };
-
-    let argv = build_systemd_run_argv(&plan).unwrap();
-    let argv = argv
-        .iter()
-        .map(|value| value.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        argv,
-        vec![
-            "systemd-run".to_string(),
-            "--user".to_string(),
-            "--scope".to_string(),
-            "sh".to_string(),
-            "-lc".to_string(),
-            "echo ok".to_string(),
-        ]
-    );
-}
-
-#[test]
-fn linux_detect_reports_missing_systemd_run() {
-    let report = detect_linux_capabilities(LinuxProbe {
-        has_systemd_run: false,
-        has_cgroup_v2: true,
-        user_manager_reachable: true,
-    });
-
-    assert_eq!(report.platform, Platform::Linux);
-    assert_eq!(report.backend, BackendKind::LinuxSystemd);
-    assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
-    assert_eq!(report.cpu, CapabilityLevel::Unavailable);
-    assert_eq!(report.memory, CapabilityLevel::Unavailable);
-    assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-    assert!(
-        report
-            .warnings
+        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = argv
             .iter()
-            .any(|warning| warning.contains("systemd-run"))
-    );
-    assert!(
-        !report
-            .warnings
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(argv[0], "systemd-run");
+        assert!(argv.iter().any(|value| value == "--user"));
+        assert!(argv.iter().any(|value| value == "--scope"));
+        assert!(argv.iter().any(|value| value == "--property=CPUQuota=100%"));
+        assert!(
+            argv.iter()
+                .any(|value| value == "--property=MemoryHigh=966367642")
+        );
+        assert!(
+            argv.iter()
+                .any(|value| value == "--property=MemoryMax=1073741824")
+        );
+        assert!(
+            argv.iter()
+                .any(|value| value == "--property=MemorySwapMax=0")
+        );
+    }
+
+    #[test]
+    fn linux_command_wraps_shell_script_when_requested() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo ok")],
+            resource_spec: ResourceSpec {
+                shell: Some(ShellKind::Sh),
+                ..ResourceSpec::default()
+            },
+            platform: Platform::Linux,
+        };
+
+        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = argv
             .iter()
-            .any(|warning| warning.contains("user manager"))
-    );
-}
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
 
-#[test]
-fn linux_detect_reports_enforced_happy_path() {
-    let report = detect_linux_capabilities(LinuxProbe {
-        has_systemd_run: true,
-        has_cgroup_v2: true,
-        user_manager_reachable: true,
-    });
+        assert_eq!(
+            argv,
+            vec![
+                "systemd-run".to_string(),
+                "--user".to_string(),
+                "--scope".to_string(),
+                "sh".to_string(),
+                "-lc".to_string(),
+                "echo ok".to_string(),
+            ]
+        );
+    }
 
-    assert_eq!(report.backend_state, CapabilityLevel::Enforced);
-    assert_eq!(report.cpu, CapabilityLevel::Enforced);
-    assert_eq!(report.memory, CapabilityLevel::Enforced);
-    assert_eq!(report.interactive, CapabilityLevel::Enforced);
-    assert!(report.warnings.is_empty());
-}
+    #[test]
+    fn linux_command_rejects_multiple_shell_tokens() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo"), OsString::from("ok")],
+            resource_spec: ResourceSpec {
+                shell: Some(ShellKind::Sh),
+                ..ResourceSpec::default()
+            },
+            platform: Platform::Linux,
+        };
 
-#[test]
-fn linux_detect_reports_missing_cgroup_v2() {
-    let report = detect_linux_capabilities(LinuxProbe {
-        has_systemd_run: true,
-        has_cgroup_v2: false,
-        user_manager_reachable: true,
-    });
+        let error = build_systemd_run_argv(&plan).unwrap_err().to_string();
 
-    assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
-    assert_eq!(report.cpu, CapabilityLevel::Unavailable);
-    assert_eq!(report.memory, CapabilityLevel::Unavailable);
-    assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("cgroup"))
-    );
-}
+        assert!(error.contains("exactly one script token"));
+    }
 
-#[test]
-fn linux_detect_reports_missing_user_manager() {
-    let report = detect_linux_capabilities(LinuxProbe {
-        has_systemd_run: true,
-        has_cgroup_v2: true,
-        user_manager_reachable: false,
-    });
+    #[test]
+    fn linux_detect_reports_missing_systemd_run() {
+        let report = detect_linux_capabilities(LinuxProbe {
+            has_systemd_run: false,
+            has_cgroup_v2: true,
+            user_manager_reachable: true,
+        });
 
-    assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
-    assert_eq!(report.cpu, CapabilityLevel::Unavailable);
-    assert_eq!(report.memory, CapabilityLevel::Unavailable);
-    assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("user manager"))
-    );
+        assert_eq!(report.platform, Platform::Linux);
+        assert_eq!(report.backend, BackendKind::LinuxSystemd);
+        assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
+        assert_eq!(report.cpu, CapabilityLevel::Unavailable);
+        assert_eq!(report.memory, CapabilityLevel::Unavailable);
+        assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("systemd-run"))
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("user manager"))
+        );
+    }
+
+    #[test]
+    fn linux_detect_reports_enforced_happy_path() {
+        let report = detect_linux_capabilities(LinuxProbe {
+            has_systemd_run: true,
+            has_cgroup_v2: true,
+            user_manager_reachable: true,
+        });
+
+        assert_eq!(report.backend_state, CapabilityLevel::Enforced);
+        assert_eq!(report.cpu, CapabilityLevel::Enforced);
+        assert_eq!(report.memory, CapabilityLevel::Enforced);
+        assert_eq!(report.interactive, CapabilityLevel::Enforced);
+        assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn linux_detect_reports_missing_cgroup_v2() {
+        let report = detect_linux_capabilities(LinuxProbe {
+            has_systemd_run: true,
+            has_cgroup_v2: false,
+            user_manager_reachable: true,
+        });
+
+        assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
+        assert_eq!(report.cpu, CapabilityLevel::Unavailable);
+        assert_eq!(report.memory, CapabilityLevel::Unavailable);
+        assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("cgroup"))
+        );
+    }
+
+    #[test]
+    fn linux_detect_reports_missing_user_manager() {
+        let report = detect_linux_capabilities(LinuxProbe {
+            has_systemd_run: true,
+            has_cgroup_v2: true,
+            user_manager_reachable: false,
+        });
+
+        assert_eq!(report.backend_state, CapabilityLevel::Unavailable);
+        assert_eq!(report.cpu, CapabilityLevel::Unavailable);
+        assert_eq!(report.memory, CapabilityLevel::Unavailable);
+        assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("user manager"))
+        );
+    }
 }

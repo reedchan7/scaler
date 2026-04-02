@@ -53,9 +53,13 @@ pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>
 
     match plan.resource_spec.shell {
         Some(shell) => {
+            anyhow::ensure!(
+                plan.argv.len() == 1,
+                "shell launch plan requires exactly one script token"
+            );
             argv.push(shell_program(shell));
             argv.push(OsString::from("-lc"));
-            argv.push(shell_script(&plan.argv));
+            argv.push(plan.argv[0].clone());
         }
         None => argv.extend(plan.argv.iter().cloned()),
     }
@@ -118,20 +122,6 @@ fn shell_program(shell: ShellKind) -> OsString {
         ShellKind::Bash => OsString::from("bash"),
         ShellKind::Zsh => OsString::from("zsh"),
     }
-}
-
-fn shell_script(argv: &[OsString]) -> OsString {
-    if argv.len() == 1 {
-        return argv[0].clone();
-    }
-
-    let script = argv
-        .iter()
-        .map(|value| value.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    OsString::from(script)
 }
 
 fn find_in_path(program: &str) -> Option<PathBuf> {
