@@ -79,9 +79,9 @@ mod macos_tests {
         let missing_taskpolicy = detect_macos_capabilities(
             MacosProbe {
                 has_taskpolicy: false,
-                has_renice: true,
+                has_renice: false,
                 has_memory_support: false,
-                has_pty_support: true,
+                has_pty_support: false,
                 platform_version_supported: true,
             },
             InteractiveMode::Auto,
@@ -104,6 +104,18 @@ mod macos_tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("memory"))
+        );
+        assert!(
+            !missing_taskpolicy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("renice"))
+        );
+        assert!(
+            !missing_taskpolicy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("PTY"))
         );
 
         let no_pty_auto = detect_macos_capabilities(
@@ -164,9 +176,9 @@ mod macos_tests {
         let report = detect_macos_capabilities(
             MacosProbe {
                 has_taskpolicy: true,
-                has_renice: true,
-                has_memory_support: true,
-                has_pty_support: true,
+                has_renice: false,
+                has_memory_support: false,
+                has_pty_support: false,
                 platform_version_supported: false,
             },
             InteractiveMode::Auto,
@@ -181,6 +193,24 @@ mod macos_tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("version"))
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("renice"))
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("memory"))
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("PTY"))
         );
     }
 
@@ -281,8 +311,12 @@ mod macos_tests {
     }
 
     #[test]
-    fn macos_command_uses_sh_wrapper_for_documented_shell_modes() {
-        for shell in [ShellKind::Sh, ShellKind::Bash, ShellKind::Zsh] {
+    fn macos_command_uses_requested_shell_wrapper_for_documented_shell_modes() {
+        for (shell, expected_program) in [
+            (ShellKind::Sh, "sh"),
+            (ShellKind::Bash, "bash"),
+            (ShellKind::Zsh, "zsh"),
+        ] {
             let plan = LaunchPlan {
                 argv: vec![OsString::from("echo ok")],
                 resource_spec: ResourceSpec {
@@ -300,7 +334,11 @@ mod macos_tests {
 
             assert_eq!(
                 &argv[argv.len() - 3..],
-                ["sh".to_string(), "-lc".to_string(), "echo ok".to_string()]
+                [
+                    expected_program.to_string(),
+                    "-lc".to_string(),
+                    "echo ok".to_string(),
+                ]
             );
         }
     }

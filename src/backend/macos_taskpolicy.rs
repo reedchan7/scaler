@@ -10,6 +10,7 @@ use anyhow::Context;
 
 use crate::core::{
     BackendKind, CapabilityLevel, CapabilityReport, InteractiveMode, LaunchPlan, Platform,
+    ShellKind,
 };
 
 pub struct MacosProbe {
@@ -46,12 +47,12 @@ pub fn build_taskpolicy_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>>
     }
 
     match plan.resource_spec.shell {
-        Some(_) => {
+        Some(shell) => {
             anyhow::ensure!(
                 plan.argv.len() == 1,
                 "shell launch plan requires exactly one script token"
             );
-            argv.push(OsString::from("sh"));
+            argv.push(shell_program(shell));
             argv.push(OsString::from("-lc"));
             argv.push(plan.argv[0].clone());
         }
@@ -76,15 +77,16 @@ pub fn detect_macos_capabilities(
         warnings.push("macOS platform version is not supported by the taskpolicy backend".into());
     }
 
-    if !probe.has_renice {
+    if backend_available && !probe.has_renice {
         warnings.push("renice is not available; CPU lowering is best-effort only".to_string());
     }
 
-    if probe.has_taskpolicy && !probe.has_memory_support {
+    if backend_available && !probe.has_memory_support {
         warnings.push("taskpolicy memory support is unavailable on this host".to_string());
     }
 
-    if !probe.has_pty_support && !matches!(interactive, InteractiveMode::Never) {
+    if backend_available && !probe.has_pty_support && !matches!(interactive, InteractiveMode::Never)
+    {
         warnings.push("PTY support is unavailable for interactive taskpolicy launches".into());
     }
 
@@ -134,6 +136,14 @@ fn capability_when_backend_ready(ready: bool) -> CapabilityLevel {
         CapabilityLevel::BestEffort
     } else {
         CapabilityLevel::Unavailable
+    }
+}
+
+fn shell_program(shell: ShellKind) -> OsString {
+    match shell {
+        ShellKind::Sh => OsString::from("sh"),
+        ShellKind::Bash => OsString::from("bash"),
+        ShellKind::Zsh => OsString::from("zsh"),
     }
 }
 
