@@ -30,7 +30,7 @@ pub fn run() -> anyhow::Result<()> {
         }
         crate::cli::args::Command::Run(run) => {
             let plan = build_launch_plan(run);
-            let backend = PlainFallbackBackend;
+            let backend = crate::core::run_loop::PlainFallbackBackend::default();
             let outcome = crate::core::run_loop::execute(plan, &backend)?;
             println!("{}", crate::core::summary::render(&outcome));
             Ok(())
@@ -80,39 +80,5 @@ fn current_platform() -> crate::core::Platform {
         "linux" => crate::core::Platform::Linux,
         "macos" => crate::core::Platform::Macos,
         _ => crate::core::Platform::Unsupported,
-    }
-}
-
-struct PlainFallbackBackend;
-
-impl crate::backend::Backend for PlainFallbackBackend {
-    fn detect(&self) -> crate::core::CapabilityReport {
-        crate::backend::detect_host_capabilities()
-    }
-
-    fn launch(
-        &self,
-        _plan: &crate::core::LaunchPlan,
-    ) -> anyhow::Result<crate::core::RunningHandle> {
-        anyhow::bail!("run backend execution is not implemented yet")
-    }
-
-    fn try_wait(
-        &self,
-        _handle: &mut crate::core::RunningHandle,
-    ) -> anyhow::Result<Option<std::process::ExitStatus>> {
-        anyhow::bail!("run backend execution is not implemented yet")
-    }
-
-    fn sample(&self, _handle: &crate::core::RunningHandle) -> anyhow::Result<crate::core::Sample> {
-        anyhow::bail!("run backend execution is not implemented yet")
-    }
-
-    fn terminate(
-        &self,
-        _handle: &crate::core::RunningHandle,
-        _signal: crate::core::Signal,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!("run backend execution is not implemented yet")
     }
 }
