@@ -1,0 +1,128 @@
+name: Manual Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump strategy
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - exact
+      version:
+        description: Exact version or tag (required when bump=exact)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: manual-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tag-release:
+    name: Bump version and push tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Run validation suite
+        run: |
+          cargo fmt -- --check
+          cargo clippy --tests -- -D warnings
+          cargo test -- --nocapture
+
+      - name: Resolve next version
+        id: version
+        env:
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          current="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "${current}" ]]; then
+            echo "Could not read Cargo.toml version" >&2
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "${current}"
+          case "${INPUT_BUMP}" in
+            patch)
+              next="${major}.${minor}.$((patch + 1))"
+              ;;
+            minor)
+              next="${major}.$((minor + 1)).0"
+              ;;
+            major)
+              next="$((major + 1)).0.0"
+              ;;
+            exact)
+              next="${INPUT_VERSION#v}"
+              if [[ -z "${next}" ]]; then
+                echo "version input is required when bump=exact" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported bump strategy: ${INPUT_BUMP}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "${next}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Resolved version ${next} is not semantic version x.y.z" >&2
+            exit 1
+          fi
+
+          tag="v${next}"
+          if git rev-parse "${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists locally" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists on origin" >&2
+            exit 1
+          fi
+
+          echo "version=${next}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Bump Cargo version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -i -E 's/^version = "([^"]+)"/version = "'"${VERSION}"'"/' Cargo.toml
+
+      - name: Commit and tag release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: release ${TAG}"
+          git tag "${TAG}"
+
+      - name: Push branch and tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "${TAG}"

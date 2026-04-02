@@ -81,3 +81,16 @@ scaler run --shell bash -- 'echo start && sleep 1 && echo done'
 ```
 
 Shell mode requires exactly one script token after `--`. Direct command mode requires the `--` delimiter before the executable so dash-prefixed programs and flags are preserved without ambiguity.
+
+## GitHub Actions
+
+The repository includes three GitHub Actions workflows:
+
+- `CI`
+  Runs on normal pushes and pull requests. It checks formatting, runs clippy, runs the full test suite, and builds the release binary on Linux and macOS. It does not publish release assets.
+- `Release`
+  Runs automatically when a `v*.*.*` tag is pushed. It validates that the tag matches `Cargo.toml`, builds release artifacts for Linux and macOS, packages them, generates checksums, and uploads them to the corresponding GitHub Release.
+- `Manual Release Tag`
+  Runs from `workflow_dispatch`. It lets you choose a semantic-version bump (`patch`, `minor`, `major`) or provide an exact version, updates `Cargo.toml`, commits the version bump, creates a `vX.Y.Z` tag, and pushes it. The pushed tag then triggers the `Release` workflow.
+
+Release assets are only published from the tag-driven release workflow. Ordinary pushes never upload binaries to GitHub Releases.
