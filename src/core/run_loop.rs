@@ -51,6 +51,9 @@ impl InterruptPlan {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlainFallbackBackend;
 
+#[derive(Debug)]
+pub struct SignalBridgeGuard;
+
 pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
     anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
 
@@ -128,6 +131,22 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
         }
 
         thread::sleep(poll_interval);
+    }
+}
+
+pub fn install_signal_bridge() -> anyhow::Result<SignalBridgeGuard> {
+    let install_result = signal_bridge_install_result();
+    if let Err(message) = install_result {
+        anyhow::bail!(message.clone());
+    }
+
+    SIGNAL_BRIDGE_ACTIVE.fetch_add(1, Ordering::SeqCst);
+    Ok(SignalBridgeGuard)
+}
+
+impl Drop for SignalBridgeGuard {
+    fn drop(&mut self) {
+        SIGNAL_BRIDGE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -331,6 +350,7 @@ struct RuntimeOverrides {
 }
 
 static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SIGNAL_BRIDGE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
     match interactive_mode {
@@ -489,6 +509,18 @@ fn execution_trace() -> &'static Mutex<ExecutionTrace> {
 fn runtime_overrides() -> &'static Mutex<RuntimeOverrides> {
     static RUNTIME_OVERRIDES: OnceLock<Mutex<RuntimeOverrides>> = OnceLock::new();
     RUNTIME_OVERRIDES.get_or_init(|| Mutex::new(RuntimeOverrides::default()))
+}
+
+fn signal_bridge_install_result() -> &'static Result<(), String> {
+    static SIGNAL_BRIDGE_INSTALL: OnceLock<Result<(), String>> = OnceLock::new();
+    SIGNAL_BRIDGE_INSTALL.get_or_init(|| {
+        ctrlc::set_handler(|| {
+            if SIGNAL_BRIDGE_ACTIVE.load(Ordering::SeqCst) > 0 {
+                INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+            }
+        })
+        .map_err(|error| format!("failed to install Ctrl-C handler: {error}"))
+    })
 }
 
 fn record_event(event: &'static str) {

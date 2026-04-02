@@ -1,9 +1,11 @@
 use std::{
     ffi::OsString,
+    process::Stdio,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
+use assert_cmd::cargo::cargo_bin;
 use scaler::{
     backend::Backend,
     core::{
@@ -48,19 +50,71 @@ fn execute_escalates_interrupts_in_order() {
 
     assert!(outcome.exit_status.success());
     assert_eq!(
-        backend.recorded_signals(),
+        backend.recorded_signal_order(),
         vec![Signal::Interrupt, Signal::Terminate, Signal::Kill]
     );
+    let timings = backend.recorded_signal_timings();
+    assert!(timings[0] < Duration::from_millis(20));
+    assert!(timings[1] >= Duration::from_millis(20));
+    assert!(timings[1] < Duration::from_millis(80));
+    assert!(timings[2] >= Duration::from_millis(40));
+    assert!(timings[2] < Duration::from_millis(120));
+}
+
+#[test]
+fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
+    let child = std::process::Command::new(cargo_bin("scaler"))
+        .args([
+            "run",
+            "--",
+            "/bin/sh",
+            "-lc",
+            "trap 'exit 130' INT; while true; do sleep 1; done",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    std::thread::sleep(Duration::from_secs(1));
+    let signal_status = std::process::Command::new("kill")
+        .arg("-INT")
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(signal_status.success());
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("exit_status:"));
+    assert!(stdout.contains("runtime:"));
 }
 
 #[derive(Default)]
 struct RecordingBackend {
-    signals: Arc<Mutex<Vec<Signal>>>,
+    launched_at: Arc<Mutex<Option<Instant>>>,
+    signals: Arc<Mutex<Vec<(Signal, Duration)>>>,
 }
 
 impl RecordingBackend {
-    fn recorded_signals(&self) -> Vec<Signal> {
-        self.signals.lock().unwrap().clone()
+    fn recorded_signal_order(&self) -> Vec<Signal> {
+        self.signals
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(signal, _)| *signal)
+            .collect()
+    }
+
+    fn recorded_signal_timings(&self) -> Vec<Duration> {
+        self.signals
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, elapsed)| *elapsed)
+            .collect()
     }
 }
 
@@ -70,6 +124,7 @@ impl Backend for RecordingBackend {
     }
 
     fn launch(&self, _plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
+        *self.launched_at.lock().unwrap() = Some(Instant::now());
         Ok(RunningHandle {
             root_pid: 4242,
             launch_time: SystemTime::now(),
@@ -99,7 +154,9 @@ impl Backend for RecordingBackend {
     }
 
     fn terminate(&self, _handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
-        self.signals.lock().unwrap().push(signal);
+        let launched_at = *self.launched_at.lock().unwrap();
+        let elapsed = launched_at.unwrap().elapsed();
+        self.signals.lock().unwrap().push((signal, elapsed));
         Ok(())
     }
 }

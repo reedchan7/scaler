@@ -31,6 +31,7 @@ pub fn run() -> anyhow::Result<()> {
         crate::cli::args::Command::Run(run) => {
             let plan = build_launch_plan(run);
             let backend = crate::core::run_loop::PlainFallbackBackend::default();
+            let _signal_bridge = crate::core::run_loop::install_signal_bridge()?;
             let outcome = crate::core::run_loop::execute(plan, &backend)?;
             println!("{}", crate::core::summary::render(&outcome));
             Ok(())
