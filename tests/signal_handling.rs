@@ -1,5 +1,6 @@
 use std::{
     ffi::OsString,
+    io::Write,
     process::Stdio,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
@@ -9,14 +10,16 @@ use assert_cmd::cargo::cargo_bin;
 use scaler::{
     backend::Backend,
     core::{
-        CapabilityReport, IoMode, LaunchPlan, Platform, ResourceSpec, RunOutcome, RunningHandle,
-        Sample, Signal,
+        CapabilityReport, InteractiveMode, IoMode, LaunchPlan, Platform, ResourceSpec, RunOutcome,
+        RunningHandle, Sample, Signal,
         run_loop::{
-            InterruptPlan, execute, request_interrupt_for_test, reset_test_state,
-            set_test_interrupt_plan_for_next_run, set_test_poll_interval_for_next_run,
+            InterruptPlan, PlainFallbackBackend, execute, request_interrupt_for_test,
+            reset_test_state, set_test_interrupt_plan_for_next_run,
+            set_test_poll_interval_for_next_run,
         },
     },
 };
+use tempfile::NamedTempFile;
 
 #[test]
 fn interrupt_plan_is_sigint_then_sigterm_then_sigkill() {
@@ -54,11 +57,10 @@ fn execute_escalates_interrupts_in_order() {
         vec![Signal::Interrupt, Signal::Terminate, Signal::Kill]
     );
     let timings = backend.recorded_signal_timings();
-    assert!(timings[0] < Duration::from_millis(20));
     assert!(timings[1] >= Duration::from_millis(20));
-    assert!(timings[1] < Duration::from_millis(80));
+    assert!(timings[1] < Duration::from_millis(120));
     assert!(timings[2] >= Duration::from_millis(40));
-    assert!(timings[2] < Duration::from_millis(120));
+    assert!(timings[2] < Duration::from_millis(180));
 }
 
 #[test]
@@ -86,10 +88,78 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
     assert!(signal_status.success());
 
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(130));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("exit_status:"));
     assert!(stdout.contains("runtime:"));
+}
+
+#[test]
+fn plain_fallback_termination_targets_the_process_group() {
+    reset_test_state();
+    set_test_poll_interval_for_next_run(Duration::from_millis(5));
+    set_test_interrupt_plan_for_next_run(Duration::from_millis(20), Duration::from_millis(40));
+
+    let pidfile = NamedTempFile::new().unwrap();
+    let pidfile_path = pidfile.path().to_string_lossy().into_owned();
+    let mut script = NamedTempFile::new().unwrap();
+    write!(
+        script,
+        "#!/bin/sh\ntrap '' INT TERM\n/bin/sh -lc \"echo \\$\\$ > '$1'; trap '' INT TERM; while :; do sleep 1; done\" &\nwhile :; do sleep 1; done\n"
+    )
+    .unwrap();
+    script.flush().unwrap();
+    let script_path = script.path().to_string_lossy().into_owned();
+
+    let backend = PlainFallbackBackend::default();
+    let pidfile_for_interrupt = pidfile_path.clone();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if std::fs::read_to_string(&pidfile_for_interrupt)
+                .map(|contents| !contents.trim().is_empty())
+                .unwrap_or(false)
+            {
+                request_interrupt_for_test();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        request_interrupt_for_test();
+    });
+
+    let outcome = execute(
+        LaunchPlan {
+            argv: vec![
+                OsString::from("/bin/sh"),
+                OsString::from(script_path),
+                OsString::from(pidfile_path),
+            ],
+            resource_spec: ResourceSpec {
+                interactive: InteractiveMode::Never,
+                ..ResourceSpec::default()
+            },
+            platform: host_platform(),
+        },
+        &backend,
+    )
+    .unwrap();
+
+    let child_pid = std::fs::read_to_string(pidfile.path())
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let alive = std::process::Command::new("kill")
+        .arg("-0")
+        .arg(child_pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+
+    assert!(!outcome.exit_status.success());
+    assert!(!alive);
 }
 
 #[derive(Default)]

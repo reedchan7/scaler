@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     ffi::OsStr,
     io::{Read, Write},
     process::{Child, Command, Stdio},
@@ -22,6 +22,7 @@ use crate::{
 };
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+const CONTROL_INTERVAL_CAP: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterruptPlan {
@@ -73,19 +74,19 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
     }
 
     let started_at = handle.launch_time;
-    let poll_interval = configured_poll_interval();
+    let sample_interval = configured_sample_interval();
+    let control_interval = sample_interval.min(CONTROL_INTERVAL_CAP);
     let interrupt_plan = configured_interrupt_plan();
     let mut peak_memory = None;
     let mut samples = Vec::new();
     let mut interrupt_started_at = None;
     let mut sent_sigterm = false;
     let mut sent_sigkill = false;
+    let mut next_sample_due = Instant::now();
 
     loop {
-        relay_output_frames(handle.root_pid)?;
-
         if let Some(exit_status) = backend.try_wait(&mut handle)? {
-            finalize_process_output(handle.root_pid, poll_interval)?;
+            finalize_process_output(handle.root_pid, control_interval)?;
             remove_process_state(handle.root_pid);
             record_event("restore_terminal");
             record_event("render_summary");
@@ -121,16 +122,19 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
             }
         }
 
-        if let Ok(sample) = backend.sample(&handle) {
-            peak_memory = update_peak_memory(peak_memory, &sample);
-            samples.push(SummarySample {
-                captured_at: sample.captured_at,
-                cpu_percent: sample.cpu_percent,
-                memory_bytes: sample.memory_bytes,
-            });
+        if Instant::now() >= next_sample_due {
+            if let Ok(sample) = backend.sample(&handle) {
+                peak_memory = update_peak_memory(peak_memory, &sample);
+                samples.push(SummarySample {
+                    captured_at: sample.captured_at,
+                    cpu_percent: sample.cpu_percent,
+                    memory_bytes: sample.memory_bytes,
+                });
+            }
+            next_sample_due = Instant::now() + sample_interval;
         }
 
-        thread::sleep(poll_interval);
+        thread::sleep(control_interval);
     }
 }
 
@@ -251,14 +255,21 @@ impl Backend for PlainFallbackBackend {
             Signal::Terminate => "-TERM",
             Signal::Kill => "-KILL",
         };
+        let process_group = format!("-{}", handle.root_pid);
         let status = Command::new("kill")
             .arg(signal_flag)
-            .arg(handle.root_pid.to_string())
+            .arg("--")
+            .arg(&process_group)
             .status()
-            .with_context(|| format!("failed to send {signal_flag} to pid {}", handle.root_pid))?;
+            .with_context(|| {
+                format!(
+                    "failed to send {signal_flag} to process group {}",
+                    handle.root_pid
+                )
+            })?;
         anyhow::ensure!(
             status.success(),
-            "kill command exited unsuccessfully for pid {}",
+            "kill command exited unsuccessfully for process group {}",
             handle.root_pid
         );
         Ok(())
@@ -322,7 +333,6 @@ pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_aft
 struct ProcessState {
     child: Mutex<Child>,
     collector: Mutex<OutputCollector>,
-    frames: Mutex<VecDeque<OutputFrame>>,
     readers_alive: AtomicUsize,
 }
 
@@ -331,7 +341,6 @@ impl ProcessState {
         Self {
             child: Mutex::new(child),
             collector: Mutex::new(OutputCollector::default()),
-            frames: Mutex::new(VecDeque::new()),
             readers_alive: AtomicUsize::new(0),
         }
     }
@@ -384,6 +393,12 @@ fn build_local_command(plan: &LaunchPlan, io_mode: IoMode) -> anyhow::Result<Com
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.process_group(0);
+    }
     Ok(command)
 }
 
@@ -432,7 +447,8 @@ where
                             OutputStream::PtyMerged => collector.push_pty(bytes),
                         }
                     };
-                    state.frames.lock().unwrap().push_back(frame);
+                    let _ = relay_frame(&frame);
+                    execution_trace().lock().unwrap().frames.push(frame);
                 }
                 Err(_) => break,
             }
@@ -440,14 +456,6 @@ where
 
         state.readers_alive.fetch_sub(1, Ordering::SeqCst);
     });
-}
-
-fn relay_output_frames(root_pid: u32) -> anyhow::Result<()> {
-    for frame in drain_process_frames(root_pid) {
-        relay_frame(&frame)?;
-        execution_trace().lock().unwrap().frames.push(frame);
-    }
-    Ok(())
 }
 
 fn relay_frame(frame: &OutputFrame) -> anyhow::Result<()> {
@@ -468,20 +476,9 @@ fn relay_frame(frame: &OutputFrame) -> anyhow::Result<()> {
 
 fn finalize_process_output(root_pid: u32, poll_interval: Duration) -> anyhow::Result<()> {
     while readers_still_running(root_pid) {
-        relay_output_frames(root_pid)?;
         thread::sleep(poll_interval.min(Duration::from_millis(10)));
     }
-
-    relay_output_frames(root_pid)?;
     Ok(())
-}
-
-fn drain_process_frames(root_pid: u32) -> Vec<OutputFrame> {
-    let Some(state) = process_state(root_pid) else {
-        return Vec::new();
-    };
-    let mut queue = state.frames.lock().unwrap();
-    queue.drain(..).collect()
 }
 
 fn readers_still_running(root_pid: u32) -> bool {
@@ -544,7 +541,7 @@ fn clear_execution_trace() {
     trace.frames.clear();
 }
 
-fn configured_poll_interval() -> Duration {
+fn configured_sample_interval() -> Duration {
     runtime_overrides()
         .lock()
         .unwrap()

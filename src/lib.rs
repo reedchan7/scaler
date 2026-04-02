@@ -34,6 +34,11 @@ pub fn run() -> anyhow::Result<()> {
             let _signal_bridge = crate::core::run_loop::install_signal_bridge()?;
             let outcome = crate::core::run_loop::execute(plan, &backend)?;
             println!("{}", crate::core::summary::render(&outcome));
+            if let Some(exit_code) = resolved_exit_code(&outcome.exit_status) {
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
             Ok(())
         }
         crate::cli::args::Command::Version => {
@@ -81,5 +86,23 @@ fn current_platform() -> crate::core::Platform {
         "linux" => crate::core::Platform::Linux,
         "macos" => crate::core::Platform::Macos,
         _ => crate::core::Platform::Unsupported,
+    }
+}
+
+fn resolved_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
+    if let Some(code) = status.code() {
+        return Some(code);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        return status.signal().map(|signal| 128 + signal);
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
     }
 }

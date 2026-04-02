@@ -1,4 +1,4 @@
-use std::{ffi::OsString, time::Duration};
+use std::{ffi::OsString, io::Read, process::Stdio, sync::mpsc, time::Duration};
 
 use assert_cmd::Command as AssertCommand;
 use predicates::prelude::*;
@@ -18,6 +18,7 @@ use scaler::core::{
 fn pipe_frames_keep_per_stream_order() {
     let mut sequence = 0;
 
+    assert_eq!(next_sequence(&mut sequence), 0);
     assert_eq!(next_sequence(&mut sequence), 1);
     assert_eq!(next_sequence(&mut sequence), 2);
 
@@ -26,6 +27,8 @@ fn pipe_frames_keep_per_stream_order() {
     let stdout_second = collector.push_stdout(b"second");
 
     assert_eq!(stdout_first.sequence + 1, stdout_second.sequence);
+    assert_eq!(stdout_first.sequence, 0);
+    assert_eq!(stdout_second.sequence, 1);
     assert_eq!(stdout_first.stream, OutputStream::Stdout);
     assert_eq!(stdout_second.stream, OutputStream::Stdout);
     assert_eq!(stdout_first.bytes, b"first");
@@ -118,6 +121,42 @@ fn binary_run_executes_command_and_renders_summary() {
         .assert()
         .success()
         .stdout(predicate::str::contains("hi").and(predicate::str::contains("exit_status:")));
+}
+
+#[test]
+fn binary_run_propagates_child_exit_code() {
+    let mut command = AssertCommand::cargo_bin("scaler").unwrap();
+
+    command.args(["run", "--", "/bin/sh", "-lc", "exit 7"]);
+    command
+        .assert()
+        .code(7)
+        .stdout(predicate::str::contains("exit_status:").and(predicate::str::contains("7")));
+}
+
+#[test]
+fn binary_run_forwards_stdout_before_first_sample_tick() {
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("scaler"))
+        .args(["run", "--", "/bin/sh", "-lc", "printf ready; sleep 1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 5];
+        stdout.read_exact(&mut buffer).unwrap();
+        let _ = tx.send(buffer);
+        let mut rest = Vec::new();
+        let _ = stdout.read_to_end(&mut rest);
+    });
+
+    let first_bytes = rx.recv_timeout(Duration::from_millis(490)).unwrap();
+    assert_eq!(&first_bytes, b"ready");
+    assert!(child.wait().unwrap().success());
 }
 
 fn host_platform() -> Platform {

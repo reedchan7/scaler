@@ -3,8 +3,9 @@ use std::time::SystemTime;
 use crate::core::{OutputFrame, OutputStream};
 
 pub fn next_sequence(current: &mut u64) -> u64 {
+    let sequence = *current;
     *current += 1;
-    *current
+    sequence
 }
 
 #[derive(Debug, Clone)]
