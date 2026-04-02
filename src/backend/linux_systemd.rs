@@ -65,6 +65,31 @@ pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>
 pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityReport {
     let mut warnings = Vec::new();
 
+    let backend_state =
+        if probe.has_systemd_run && probe.has_cgroup_v2 && probe.user_manager_reachable {
+            CapabilityLevel::Enforced
+        } else {
+            CapabilityLevel::Unavailable
+        };
+
+    let cpu = if probe.has_cgroup_v2 {
+        CapabilityLevel::Enforced
+    } else {
+        CapabilityLevel::Unavailable
+    };
+
+    let memory = if probe.has_cgroup_v2 {
+        CapabilityLevel::Enforced
+    } else {
+        CapabilityLevel::Unavailable
+    };
+
+    let interactive = if probe.user_manager_reachable {
+        CapabilityLevel::Enforced
+    } else {
+        CapabilityLevel::Unavailable
+    };
+
     if !probe.has_systemd_run {
         warnings.push("systemd-run is not available in PATH".to_string());
     }
@@ -77,21 +102,13 @@ pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityRe
         warnings.push("systemd user manager is unreachable".to_string());
     }
 
-    let all_prereqs_met =
-        probe.has_systemd_run && probe.has_cgroup_v2 && probe.user_manager_reachable;
-    let enforced = if all_prereqs_met {
-        CapabilityLevel::Enforced
-    } else {
-        CapabilityLevel::Unavailable
-    };
-
     crate::core::CapabilityReport {
         platform: Platform::Linux,
         backend: BackendKind::LinuxSystemd,
-        backend_state: enforced,
-        cpu: enforced,
-        memory: enforced,
-        interactive: enforced,
+        backend_state,
+        cpu,
+        memory,
+        interactive,
         warnings,
     }
 }
@@ -99,7 +116,11 @@ pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityRe
 pub fn probe_linux_host() -> LinuxProbe {
     let has_systemd_run = find_in_path("systemd-run").is_some();
     let has_cgroup_v2 = Path::new("/sys/fs/cgroup/cgroup.controllers").exists();
-    let user_manager_reachable = has_systemd_run && probe_user_manager();
+    let user_manager_reachable = if has_systemd_run {
+        probe_user_manager()
+    } else {
+        true
+    };
 
     LinuxProbe {
         has_systemd_run,
