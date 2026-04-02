@@ -80,7 +80,7 @@ mod macos_tests {
             MacosProbe {
                 has_taskpolicy: false,
                 has_renice: true,
-                has_memory_support: true,
+                has_memory_support: false,
                 has_pty_support: true,
                 platform_version_supported: true,
             },
@@ -98,6 +98,12 @@ mod macos_tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("taskpolicy"))
+        );
+        assert!(
+            !missing_taskpolicy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("memory"))
         );
 
         let no_pty_auto = detect_macos_capabilities(
@@ -204,6 +210,31 @@ mod macos_tests {
             &argv[argv.len() - 3..],
             ["sh".to_string(), "-lc".to_string(), "echo ok".to_string()]
         );
+    }
+
+    #[test]
+    fn macos_command_uses_sh_wrapper_for_documented_shell_modes() {
+        for shell in [ShellKind::Sh, ShellKind::Bash, ShellKind::Zsh] {
+            let plan = LaunchPlan {
+                argv: vec![OsString::from("echo ok")],
+                resource_spec: ResourceSpec {
+                    shell: Some(shell),
+                    ..ResourceSpec::default()
+                },
+                platform: Platform::Macos,
+            };
+
+            let argv = build_taskpolicy_argv(&plan).unwrap();
+            let argv = argv
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                &argv[argv.len() - 3..],
+                ["sh".to_string(), "-lc".to_string(), "echo ok".to_string()]
+            );
+        }
     }
 
     #[test]
