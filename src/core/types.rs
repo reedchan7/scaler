@@ -4,8 +4,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use rust_decimal::Decimal;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuLimit(u32);
 
@@ -165,7 +163,7 @@ impl CapabilityReport {
             cpu: CapabilityLevel::Unavailable,
             memory: CapabilityLevel::Unavailable,
             interactive: CapabilityLevel::Unavailable,
-            warnings: vec!["no supported backend for this host".to_string()],
+            warnings: Vec::new(),
         }
     }
 }
@@ -177,20 +175,20 @@ pub struct RunningHandle {
     pub io_mode: IoMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sample {
     pub captured_at: SystemTime,
-    pub cpu_percent: Option<Decimal>,
-    pub memory_bytes: Option<u64>,
-    pub peak_memory_bytes: Option<u64>,
-    pub child_process_count: Option<u32>,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub peak_memory_bytes: u64,
+    pub child_process_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SummarySample {
     pub captured_at: SystemTime,
-    pub cpu_percent: Option<Decimal>,
-    pub memory_bytes: Option<u64>,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
