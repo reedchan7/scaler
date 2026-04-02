@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    io::{Read, Write},
+    io::{IsTerminal, Read},
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex, OnceLock,
@@ -19,6 +19,7 @@ use crate::{
         InteractiveMode, IoMode, LaunchPlan, OutputFrame, OutputStream, RunOutcome, RunningHandle,
         Sample, ShellKind, Signal, SummarySample, output::OutputCollector,
     },
+    ui::{self, MonitorSnapshot, Renderer as _, UiContext, plain::PlainRenderer, tui::TuiRenderer},
 };
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
@@ -55,20 +56,190 @@ pub struct PlainFallbackBackend;
 #[derive(Debug)]
 pub struct SignalBridgeGuard;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalState {
+    stdin: bool,
+    stdout: bool,
+    stderr: bool,
+}
+
+impl TerminalState {
+    fn all_terminals(self) -> bool {
+        self.stdin && self.stdout && self.stderr
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelectedExecution {
+    plan: LaunchPlan,
+    io_mode: IoMode,
+    use_tui: bool,
+    compact: bool,
+}
+
+#[derive(Debug)]
+enum ActiveUi {
+    Plain(PlainRenderer),
+    Tui(TuiRenderer),
+}
+
+impl ActiveUi {
+    fn render_frame(&mut self, frame: &OutputFrame) -> anyhow::Result<()> {
+        match self {
+            Self::Plain(renderer) => renderer.render_frame(frame),
+            Self::Tui(renderer) => renderer.render_frame(frame),
+        }
+    }
+
+    fn render_snapshot(&mut self, snapshot: &MonitorSnapshot) -> anyhow::Result<()> {
+        match self {
+            Self::Plain(renderer) => renderer.render_snapshot(snapshot),
+            Self::Tui(renderer) => renderer.render_snapshot(snapshot),
+        }
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::Plain(renderer) => renderer.finish(),
+            Self::Tui(renderer) => renderer.finish(),
+        }
+    }
+
+    fn is_tui(&self) -> bool {
+        matches!(self, Self::Tui(_))
+    }
+}
+
+#[derive(Debug)]
+struct UiSession {
+    renderer: ActiveUi,
+    base_context: UiContext,
+    restored: bool,
+}
+
+impl UiSession {
+    fn start(
+        selection: &SelectedExecution,
+        capabilities: crate::core::CapabilityReport,
+    ) -> anyhow::Result<Self> {
+        let base_context = UiContext {
+            command: display_command(&selection.plan),
+            capabilities: capabilities.clone(),
+            compact: selection.compact,
+            warnings: capabilities.warnings.clone(),
+        };
+
+        if selection.use_tui {
+            let options = configured_tui_options();
+            match TuiRenderer::start(base_context.clone(), options) {
+                Ok(renderer) => {
+                    record_event("tui_renderer_active");
+                    if selection.compact {
+                        record_event("compact_interactive_mode");
+                    }
+                    return Ok(Self {
+                        renderer: ActiveUi::Tui(renderer),
+                        base_context,
+                        restored: false,
+                    });
+                }
+                Err(error) => {
+                    record_event("monitor_unavailable");
+                    let context = context_with_extra_warning(
+                        &base_context,
+                        format!("monitor disabled: {error}"),
+                    );
+                    let renderer = PlainRenderer::new(&context)?;
+                    record_event("plain_renderer_active");
+                    return Ok(Self {
+                        renderer: ActiveUi::Plain(renderer),
+                        base_context,
+                        restored: false,
+                    });
+                }
+            }
+        }
+
+        if selection.plan.resource_spec.monitor {
+            record_event("monitor_unavailable");
+        }
+        let renderer = PlainRenderer::new(&base_context)?;
+        record_event("plain_renderer_active");
+        Ok(Self {
+            renderer: ActiveUi::Plain(renderer),
+            base_context,
+            restored: false,
+        })
+    }
+
+    fn render_frame(
+        &mut self,
+        frame: &OutputFrame,
+        rendered_frames: &[OutputFrame],
+    ) -> anyhow::Result<()> {
+        if let Err(error) = self.renderer.render_frame(frame) {
+            return self.handle_runtime_failure(error, rendered_frames);
+        }
+        Ok(())
+    }
+
+    fn render_snapshot(
+        &mut self,
+        snapshot: &MonitorSnapshot,
+        rendered_frames: &[OutputFrame],
+    ) -> anyhow::Result<()> {
+        if let Err(error) = self.renderer.render_snapshot(snapshot) {
+            return self.handle_runtime_failure(error, rendered_frames);
+        }
+        Ok(())
+    }
+
+    fn restore_once(&mut self) -> anyhow::Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+
+        self.renderer.finish()?;
+        record_event("restore_terminal");
+        self.restored = true;
+        Ok(())
+    }
+
+    fn handle_runtime_failure(
+        &mut self,
+        error: anyhow::Error,
+        rendered_frames: &[OutputFrame],
+    ) -> anyhow::Result<()> {
+        if !self.renderer.is_tui() {
+            return Err(error);
+        }
+
+        record_event("monitor_failed");
+        self.restore_once()?;
+        let context = context_with_extra_warning(
+            &self.base_context,
+            format!("monitor disabled after launch: {error}"),
+        );
+        let mut renderer = PlainRenderer::new(&context)?;
+        renderer.replay(rendered_frames)?;
+        self.renderer = ActiveUi::Plain(renderer);
+        record_event("plain_renderer_continues");
+        Ok(())
+    }
+}
+
 pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
     anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
 
     clear_execution_trace();
+    let capabilities = backend.detect();
+    let selection = select_execution(&plan)?;
     record_event("launch");
-    if plan.resource_spec.monitor {
-        record_event("monitor_unavailable");
-    }
-
-    let mut handle = backend.launch(&plan)?;
+    let mut handle = backend.launch(&selection.plan)?;
     record_event("launch_complete");
-    record_event("plain_renderer_active");
+    let mut ui = UiSession::start(&selection, capabilities)?;
     record_event("interactive_mode_selected");
-    match handle.io_mode {
+    match selection.io_mode {
         IoMode::Pipes => record_event("pipe_streams"),
         IoMode::Pty => record_event("pty_merged_stream"),
     }
@@ -83,12 +254,16 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
     let mut sent_sigterm = false;
     let mut sent_sigkill = false;
     let mut next_sample_due = Instant::now();
+    let mut rendered_frames = Vec::new();
 
     loop {
+        drain_output_frames(handle.root_pid, &mut ui, &mut rendered_frames)?;
+
         if let Some(exit_status) = backend.try_wait(&mut handle)? {
             finalize_process_output(handle.root_pid, control_interval)?;
+            drain_output_frames(handle.root_pid, &mut ui, &mut rendered_frames)?;
             remove_process_state(handle.root_pid);
-            record_event("restore_terminal");
+            ui.restore_once()?;
             let outcome = RunOutcome {
                 exit_status,
                 runtime: runtime_since(started_at),
@@ -132,6 +307,17 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
                     cpu_percent: sample.cpu_percent,
                     memory_bytes: sample.memory_bytes,
                 });
+                ui.render_snapshot(
+                    &MonitorSnapshot {
+                        elapsed: runtime_since(started_at),
+                        cpu_percent: Some(sample.cpu_percent),
+                        memory_bytes: Some(sample.memory_bytes),
+                        peak_memory_bytes: peak_memory,
+                        child_count: sample.child_process_count,
+                        run_status: "running".to_string(),
+                    },
+                    &rendered_frames,
+                )?;
             }
             next_sample_due = Instant::now() + sample_interval;
         }
@@ -298,6 +484,14 @@ pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
+pub fn record_ui_mode_for_test() -> Vec<&'static str> {
+    recorded_events_matching(&[
+        "tui_renderer_active",
+        "plain_renderer_active",
+        "compact_interactive_mode",
+    ])
+}
+
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {
     let mut trace = execution_trace().lock().unwrap();
     std::mem::take(&mut trace.frames)
@@ -323,6 +517,22 @@ pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_aft
     });
 }
 
+pub fn set_test_terminal_state_for_next_run(stdin: bool, stdout: bool, stderr: bool) {
+    runtime_overrides().lock().unwrap().terminal_state = Some(TerminalState {
+        stdin,
+        stdout,
+        stderr,
+    });
+}
+
+pub fn set_test_monitor_start_failure_for_next_run(message: &str) {
+    runtime_overrides().lock().unwrap().monitor_start_failure = Some(message.to_string());
+}
+
+pub fn set_test_monitor_fail_after_launch_for_next_run(draws_before_failure: usize) {
+    runtime_overrides().lock().unwrap().monitor_fail_after_draws = Some(draws_before_failure);
+}
+
 pub fn plain_fallback_command_preview_for_test(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
     let io_mode = preferred_io_mode(plan.resource_spec.interactive);
     let command = build_local_command(plan, io_mode)?;
@@ -336,6 +546,7 @@ pub fn plain_fallback_command_preview_for_test(plan: &LaunchPlan) -> anyhow::Res
 struct ProcessState {
     child: Mutex<Child>,
     collector: Mutex<OutputCollector>,
+    pending_frames: Mutex<Vec<OutputFrame>>,
     readers_alive: AtomicUsize,
 }
 
@@ -344,6 +555,7 @@ impl ProcessState {
         Self {
             child: Mutex::new(child),
             collector: Mutex::new(OutputCollector::default()),
+            pending_frames: Mutex::new(Vec::new()),
             readers_alive: AtomicUsize::new(0),
         }
     }
@@ -359,6 +571,9 @@ struct ExecutionTrace {
 struct RuntimeOverrides {
     poll_interval: Option<Duration>,
     interrupt_plan: Option<InterruptPlan>,
+    terminal_state: Option<TerminalState>,
+    monitor_start_failure: Option<String>,
+    monitor_fail_after_draws: Option<usize>,
 }
 
 static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -369,6 +584,92 @@ fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
         InteractiveMode::Always => IoMode::Pty,
         InteractiveMode::Auto | InteractiveMode::Never => IoMode::Pipes,
     }
+}
+
+fn select_execution(plan: &LaunchPlan) -> anyhow::Result<SelectedExecution> {
+    let terminal_state = detected_terminal_state();
+    let all_terminals = terminal_state.all_terminals();
+    let pty_available = pty_path_available(plan.platform);
+
+    let io_mode = match plan.resource_spec.interactive {
+        InteractiveMode::Always => {
+            anyhow::ensure!(
+                pty_available,
+                "interactive=always requires PTY support before launch"
+            );
+            IoMode::Pty
+        }
+        InteractiveMode::Never => IoMode::Pipes,
+        InteractiveMode::Auto if all_terminals && pty_available => IoMode::Pty,
+        InteractiveMode::Auto => IoMode::Pipes,
+    };
+
+    let mut selected_plan = plan.clone();
+    selected_plan.resource_spec.interactive = if io_mode == IoMode::Pty {
+        InteractiveMode::Always
+    } else {
+        InteractiveMode::Never
+    };
+
+    Ok(SelectedExecution {
+        plan: selected_plan,
+        io_mode,
+        use_tui: plan.resource_spec.monitor && all_terminals,
+        compact: io_mode == IoMode::Pty,
+    })
+}
+
+fn detected_terminal_state() -> TerminalState {
+    configured_terminal_state().unwrap_or(TerminalState {
+        stdin: std::io::stdin().is_terminal(),
+        stdout: std::io::stdout().is_terminal(),
+        stderr: std::io::stderr().is_terminal(),
+    })
+}
+
+fn pty_path_available(platform: crate::core::Platform) -> bool {
+    matches!(
+        platform,
+        crate::core::Platform::Linux
+            | crate::core::Platform::Macos
+            | crate::core::Platform::Unsupported
+    ) && command_available("script")
+}
+
+fn command_available(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(program).exists())
+    })
+}
+
+fn configured_tui_options() -> ui::tui::InitOptions {
+    let overrides = runtime_overrides().lock().unwrap();
+
+    ui::tui::InitOptions {
+        headless: overrides.terminal_state.is_some(),
+        fail_on_start: overrides.monitor_start_failure.clone(),
+        fail_after_draws: overrides.monitor_fail_after_draws,
+    }
+}
+
+fn configured_terminal_state() -> Option<TerminalState> {
+    runtime_overrides().lock().unwrap().terminal_state
+}
+
+fn context_with_extra_warning(base: &UiContext, warning: String) -> UiContext {
+    let mut context = base.clone();
+    context.warnings.push(warning);
+    context
+}
+
+fn display_command(plan: &LaunchPlan) -> String {
+    render_launch_target_command(plan).unwrap_or_else(|_| {
+        plan.argv
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
 }
 
 fn build_local_command(plan: &LaunchPlan, io_mode: IoMode) -> anyhow::Result<Command> {
@@ -502,8 +803,8 @@ where
                             OutputStream::PtyMerged => collector.push_pty(bytes),
                         }
                     };
-                    let _ = relay_frame(&frame);
-                    execution_trace().lock().unwrap().frames.push(frame);
+                    execution_trace().lock().unwrap().frames.push(frame.clone());
+                    state.pending_frames.lock().unwrap().push(frame);
                 }
                 Err(_) => break,
             }
@@ -513,19 +814,25 @@ where
     });
 }
 
-fn relay_frame(frame: &OutputFrame) -> anyhow::Result<()> {
-    match frame.stream {
-        OutputStream::Stdout | OutputStream::PtyMerged => {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&frame.bytes)?;
-            stdout.flush()?;
-        }
-        OutputStream::Stderr => {
-            let mut stderr = std::io::stderr().lock();
-            stderr.write_all(&frame.bytes)?;
-            stderr.flush()?;
-        }
+fn drain_output_frames(
+    root_pid: u32,
+    ui: &mut UiSession,
+    rendered_frames: &mut Vec<OutputFrame>,
+) -> anyhow::Result<()> {
+    let Some(state) = process_state(root_pid) else {
+        return Ok(());
+    };
+
+    let frames = {
+        let mut pending = state.pending_frames.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+
+    for frame in frames {
+        ui.render_frame(&frame, rendered_frames)?;
+        rendered_frames.push(frame);
     }
+
     Ok(())
 }
 
@@ -616,6 +923,9 @@ fn clear_runtime_overrides() {
     let mut overrides = runtime_overrides().lock().unwrap();
     overrides.poll_interval = None;
     overrides.interrupt_plan = None;
+    overrides.terminal_state = None;
+    overrides.monitor_start_failure = None;
+    overrides.monitor_fail_after_draws = None;
     INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
 }
 

@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod cli;
 pub mod core;
+pub mod ui;
 
 pub fn run() -> anyhow::Result<()> {
     let cli = match crate::cli::parse_from(std::env::args_os().collect()) {
