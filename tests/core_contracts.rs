@@ -16,8 +16,8 @@ fn sample_contract_uses_concrete_numeric_fields() {
         captured_at,
         cpu_percent: 12.5,
         memory_bytes: 1024,
-        peak_memory_bytes: 2048,
-        child_process_count: 3,
+        peak_memory_bytes: Some(2048),
+        child_process_count: Some(3),
     };
     let summary = SummarySample {
         captured_at,
@@ -28,8 +28,8 @@ fn sample_contract_uses_concrete_numeric_fields() {
     assert_eq!(sample.captured_at, captured_at);
     assert_eq!(sample.cpu_percent, 12.5);
     assert_eq!(sample.memory_bytes, 1024);
-    assert_eq!(sample.peak_memory_bytes, 2048);
-    assert_eq!(sample.child_process_count, 3);
+    assert_eq!(sample.peak_memory_bytes, Some(2048));
+    assert_eq!(sample.child_process_count, Some(3));
     assert_eq!(summary.captured_at, captured_at);
     assert_eq!(summary.cpu_percent, 6.25);
     assert_eq!(summary.memory_bytes, 512);

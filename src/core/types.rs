@@ -180,8 +180,8 @@ pub struct Sample {
     pub captured_at: SystemTime,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
-    pub peak_memory_bytes: u64,
-    pub child_process_count: u64,
+    pub peak_memory_bytes: Option<u64>,
+    pub child_process_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
