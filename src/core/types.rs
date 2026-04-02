@@ -1,4 +1,10 @@
-use std::process::ExitStatus;
+use std::{
+    ffi::OsString,
+    process::ExitStatus,
+    time::{Duration, SystemTime},
+};
+
+use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuLimit(u32);
@@ -111,19 +117,32 @@ pub enum OutputStream {
     PtyMerged,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceSpec {
     pub cpu: Option<CpuLimit>,
-    pub memory: Option<MemoryLimit>,
+    pub mem: Option<MemoryLimit>,
+    pub interactive: InteractiveMode,
+    pub shell: Option<ShellKind>,
+    pub monitor: bool,
+}
+
+impl Default for ResourceSpec {
+    fn default() -> Self {
+        Self {
+            cpu: None,
+            mem: None,
+            interactive: InteractiveMode::Auto,
+            shell: None,
+            monitor: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchPlan {
-    pub argv: Vec<String>,
-    pub shell: Option<ShellKind>,
-    pub interactive: InteractiveMode,
-    pub io_mode: IoMode,
-    pub resources: ResourceSpec,
+    pub argv: Vec<OsString>,
+    pub resource_spec: ResourceSpec,
+    pub platform: Platform,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +153,7 @@ pub struct CapabilityReport {
     pub cpu: CapabilityLevel,
     pub memory: CapabilityLevel,
     pub interactive: CapabilityLevel,
-    pub prerequisite: &'static str,
+    pub warnings: Vec<String>,
 }
 
 impl CapabilityReport {
@@ -146,37 +165,46 @@ impl CapabilityReport {
             cpu: CapabilityLevel::Unavailable,
             memory: CapabilityLevel::Unavailable,
             interactive: CapabilityLevel::Unavailable,
-            prerequisite: "no supported backend for this host",
+            warnings: vec!["no supported backend for this host".to_string()],
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningHandle {
-    pub pid: u32,
+    pub root_pid: u32,
+    pub launch_time: SystemTime,
+    pub io_mode: IoMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sample {
-    pub cpu_micros: Option<u64>,
+    pub captured_at: SystemTime,
+    pub cpu_percent: Option<Decimal>,
     pub memory_bytes: Option<u64>,
+    pub peak_memory_bytes: Option<u64>,
+    pub child_process_count: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummarySample {
-    pub peak_cpu_micros: Option<u64>,
-    pub peak_memory_bytes: Option<u64>,
+    pub captured_at: SystemTime,
+    pub cpu_percent: Option<Decimal>,
+    pub memory_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputFrame {
+    pub sequence: u64,
+    pub captured_at: SystemTime,
     pub stream: OutputStream,
     pub bytes: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub struct RunOutcome {
-    pub status: ExitStatus,
-    pub summary: SummarySample,
-    pub output: Vec<OutputFrame>,
+    pub exit_status: ExitStatus,
+    pub runtime: Duration,
+    pub peak_memory: Option<u64>,
+    pub samples: Vec<SummarySample>,
 }
