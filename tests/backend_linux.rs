@@ -6,7 +6,7 @@ mod linux_tests {
         backend::linux_systemd::{LinuxProbe, build_systemd_run_argv, detect_linux_capabilities},
         core::{
             BackendKind, CapabilityLevel, CpuLimit, InteractiveMode, LaunchPlan, MemoryLimit,
-            Platform, ResourceSpec, ShellKind,
+            Platform, PrerequisiteStatus, ResourceSpec, ShellKind,
         },
     };
 
@@ -139,6 +139,9 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Missing);
+        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
+        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Skipped);
         assert!(
             report
                 .warnings
@@ -180,6 +183,9 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
+        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Missing);
+        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Ok);
         assert!(
             report
                 .warnings
@@ -200,11 +206,34 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
+        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
+        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
+        assert_prerequisite(
+            &report.prerequisites[2],
+            "user_manager",
+            PrerequisiteStatus::Unreachable,
+        );
         assert!(
             report
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("user manager"))
         );
+    }
+
+    fn assert_prerequisite(
+        prerequisite: &scaler::core::DoctorPrerequisite,
+        expected_key: &'static str,
+        expected_status: PrerequisiteStatus,
+    ) {
+        match prerequisite {
+            scaler::core::DoctorPrerequisite::Check { key, status } => {
+                assert_eq!(*key, expected_key);
+                assert_eq!(*status, expected_status);
+            }
+            scaler::core::DoctorPrerequisite::Note(message) => {
+                panic!("expected structured prerequisite, got note: {message}");
+            }
+        }
     }
 }

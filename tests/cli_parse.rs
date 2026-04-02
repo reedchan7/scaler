@@ -381,6 +381,19 @@ fn delimiter_allows_dash_prefixed_executables() {
 }
 
 #[test]
+fn shell_form_requires_explicit_script() {
+    assert!(
+        scaler::cli::parse_from(vec![
+            "scaler".into(),
+            "run".into(),
+            "--shell".into(),
+            "sh".into(),
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn parses_interactive_and_monitor_flags() {
     let cli = Cli::try_parse_from([
         "scaler",

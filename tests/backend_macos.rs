@@ -75,6 +75,60 @@ mod macos_tests {
     }
 
     #[test]
+    fn macos_fallback_warnings_cover_missing_taskpolicy_renice_and_memory_support() {
+        let missing_taskpolicy = detect_macos_capabilities(
+            MacosProbe {
+                has_taskpolicy: false,
+                has_renice: true,
+                has_memory_support: true,
+                has_pty_support: true,
+                platform_version_supported: true,
+            },
+            InteractiveMode::Auto,
+        );
+        assert!(
+            missing_taskpolicy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("taskpolicy"))
+        );
+
+        let missing_renice = detect_macos_capabilities(
+            MacosProbe {
+                has_taskpolicy: true,
+                has_renice: false,
+                has_memory_support: true,
+                has_pty_support: true,
+                platform_version_supported: true,
+            },
+            InteractiveMode::Auto,
+        );
+        assert!(
+            missing_renice
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("renice"))
+        );
+
+        let missing_memory_support = detect_macos_capabilities(
+            MacosProbe {
+                has_taskpolicy: true,
+                has_renice: true,
+                has_memory_support: false,
+                has_pty_support: true,
+                platform_version_supported: true,
+            },
+            InteractiveMode::Auto,
+        );
+        assert!(
+            missing_memory_support
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("memory"))
+        );
+    }
+
+    #[test]
     fn macos_detect_reports_missing_taskpolicy_and_pty_rules() {
         let missing_taskpolicy = detect_macos_capabilities(
             MacosProbe {

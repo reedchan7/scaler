@@ -160,6 +160,19 @@ fn assert_sorted_warning_lines(lines: &[&str]) {
     assert!(lines.windows(2).all(|pair| pair[0] <= pair[1]));
 }
 
+#[test]
+fn doctor_smoke_output_includes_platform_backend_state_and_prerequisite() {
+    let stdout = doctor_stdout();
+
+    assert!(stdout.lines().any(|line| line.starts_with("platform: ")));
+    assert!(stdout.lines().any(|line| line.starts_with("backend_state: ")));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("prerequisite: "))
+    );
+}
+
 fn assert_line_prefixes(lines: &[&str], expected_prefixes: &[&str]) {
     assert_eq!(lines.len(), expected_prefixes.len());
     for (line, prefix) in lines.iter().zip(expected_prefixes.iter()) {
