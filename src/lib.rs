@@ -34,6 +34,7 @@ pub fn run() -> anyhow::Result<()> {
             let _signal_bridge = crate::core::run_loop::install_signal_bridge()?;
             let outcome = crate::core::run_loop::execute(plan, &backend)?;
             println!("{}", crate::core::summary::render(&outcome));
+            crate::core::run_loop::record_summary_rendered();
             if let Some(exit_code) = resolved_exit_code(&outcome.exit_status) {
                 if exit_code != 0 {
                     std::process::exit(exit_code);

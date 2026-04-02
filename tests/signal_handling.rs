@@ -1,7 +1,8 @@
 use std::{
     ffi::OsString,
-    io::Write,
+    io::{Read, Write},
     process::Stdio,
+    sync::mpsc,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
@@ -65,13 +66,13 @@ fn execute_escalates_interrupts_in_order() {
 
 #[test]
 fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
-    let child = std::process::Command::new(cargo_bin("scaler"))
+    let mut child = std::process::Command::new(cargo_bin("scaler"))
         .args([
             "run",
             "--",
             "/bin/sh",
             "-lc",
-            "trap 'exit 130' INT; while true; do sleep 1; done",
+            "printf ready; trap 'exit 130' INT; while true; do sleep 1; done",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -79,7 +80,19 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
         .spawn()
         .unwrap();
 
-    std::thread::sleep(Duration::from_secs(1));
+    let mut stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 5];
+        stdout.read_exact(&mut buffer).unwrap();
+        let _ = tx.send(buffer);
+        let mut rest = Vec::new();
+        let _ = stdout.read_to_end(&mut rest);
+    });
+
+    let first_bytes = rx.recv_timeout(Duration::from_millis(490)).unwrap();
+    assert_eq!(&first_bytes, b"ready");
+
     let signal_status = std::process::Command::new("kill")
         .arg("-INT")
         .arg(child.id().to_string())

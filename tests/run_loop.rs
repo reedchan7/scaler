@@ -6,7 +6,8 @@ use scaler::core::{
     InteractiveMode, LaunchPlan, OutputStream, Platform, ResourceSpec, RunOutcome,
     output::{OutputCollector, next_sequence},
     run_loop::{
-        PlainFallbackBackend, execute, record_interactive_mode_for_test,
+        PlainFallbackBackend, execute, plain_fallback_command_preview_for_test,
+        record_interactive_mode_for_test,
         record_monitor_fallback_for_test, record_post_launch_monitor_failure_for_test,
         record_summary_timeline_for_test, reset_test_state, set_test_poll_interval_for_next_run,
         take_output_frames_for_test,
@@ -96,20 +97,13 @@ fn plain_fallback_executes_real_command_and_collects_output_frames() {
     );
     assert_eq!(
         record_summary_timeline_for_test(),
-        vec!["launch", "restore_terminal", "render_summary"]
+        vec!["launch", "restore_terminal"]
     );
     assert_eq!(
         record_interactive_mode_for_test(),
         vec!["interactive_mode_selected", "pipe_streams"]
     );
-    assert_eq!(
-        record_post_launch_monitor_failure_for_test(),
-        vec![
-            "launch_complete",
-            "monitor_failed",
-            "plain_renderer_continues"
-        ]
-    );
+    assert!(record_post_launch_monitor_failure_for_test().is_empty());
 }
 
 #[test]
@@ -157,6 +151,32 @@ fn binary_run_forwards_stdout_before_first_sample_tick() {
     let first_bytes = rx.recv_timeout(Duration::from_millis(490)).unwrap();
     assert_eq!(&first_bytes, b"ready");
     assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn linux_pty_fallback_command_preview_uses_util_linux_script_shape() {
+    let preview = plain_fallback_command_preview_for_test(&LaunchPlan {
+        argv: vec![OsString::from("/bin/echo"), OsString::from("hi there")],
+        resource_spec: ResourceSpec {
+            interactive: InteractiveMode::Always,
+            ..ResourceSpec::default()
+        },
+        platform: Platform::Linux,
+    })
+    .unwrap();
+
+    let preview = preview
+        .iter()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(preview[0], "script");
+    assert_eq!(preview[1], "-q");
+    assert_eq!(preview[2], "-e");
+    assert_eq!(preview[3], "-c");
+    assert_eq!(preview[5], "/dev/null");
+    assert!(preview[4].contains("/bin/echo"));
+    assert!(preview[4].contains("'hi there'"));
 }
 
 fn host_platform() -> Platform {

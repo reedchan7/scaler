@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::{Read, Write},
     process::{Child, Command, Stdio},
     sync::{
@@ -60,13 +60,13 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
 
     clear_execution_trace();
     record_event("launch");
-    record_event("monitor_unavailable");
-    record_event("plain_renderer_active");
+    if plan.resource_spec.monitor {
+        record_event("monitor_unavailable");
+    }
 
     let mut handle = backend.launch(&plan)?;
     record_event("launch_complete");
-    record_event("monitor_failed");
-    record_event("plain_renderer_continues");
+    record_event("plain_renderer_active");
     record_event("interactive_mode_selected");
     match handle.io_mode {
         IoMode::Pipes => record_event("pipe_streams"),
@@ -89,7 +89,6 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
             finalize_process_output(handle.root_pid, control_interval)?;
             remove_process_state(handle.root_pid);
             record_event("restore_terminal");
-            record_event("render_summary");
             clear_runtime_overrides();
 
             return Ok(RunOutcome {
@@ -152,6 +151,10 @@ impl Drop for SignalBridgeGuard {
     fn drop(&mut self) {
         SIGNAL_BRIDGE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+pub(crate) fn record_summary_rendered() {
+    record_event("render_summary");
 }
 
 impl Backend for PlainFallbackBackend {
@@ -293,11 +296,7 @@ pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
 }
 
 pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
-    recorded_events_matching(&[
-        "launch_complete",
-        "monitor_failed",
-        "plain_renderer_continues",
-    ])
+    recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
 pub fn staged_interrupt_signals_for_test() -> [Signal; 3] {
@@ -327,6 +326,15 @@ pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_aft
         sigterm_after,
         sigkill_after,
     });
+}
+
+pub fn plain_fallback_command_preview_for_test(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
+    let io_mode = preferred_io_mode(plan.resource_spec.interactive);
+    let command = build_local_command(plan, io_mode)?;
+    let mut preview = Vec::new();
+    preview.push(command.get_program().to_os_string());
+    preview.extend(command.get_args().map(|arg| arg.to_os_string()));
+    Ok(preview)
 }
 
 #[derive(Debug)]
@@ -372,10 +380,7 @@ fn build_local_command(plan: &LaunchPlan, io_mode: IoMode) -> anyhow::Result<Com
     anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
 
     let mut command = if io_mode == IoMode::Pty {
-        let mut command = Command::new("script");
-        command.arg("-q").arg("/dev/null");
-        append_launch_target(&mut command, plan)?;
-        command
+        build_pty_command(plan)?
     } else if let Some(shell) = plan.resource_spec.shell {
         anyhow::ensure!(
             plan.argv.len() == 1,
@@ -402,6 +407,27 @@ fn build_local_command(plan: &LaunchPlan, io_mode: IoMode) -> anyhow::Result<Com
     Ok(command)
 }
 
+fn build_pty_command(plan: &LaunchPlan) -> anyhow::Result<Command> {
+    let mut command = Command::new("script");
+
+    match plan.platform {
+        crate::core::Platform::Linux => {
+            command.arg("-q");
+            command.arg("-e");
+            command.arg("-c");
+            command.arg(render_launch_target_command(plan)?);
+            command.arg("/dev/null");
+        }
+        crate::core::Platform::Macos | crate::core::Platform::Unsupported => {
+            command.arg("-q");
+            command.arg("/dev/null");
+            append_launch_target(&mut command, plan)?;
+        }
+    }
+
+    Ok(command)
+}
+
 fn append_launch_target(command: &mut Command, plan: &LaunchPlan) -> anyhow::Result<()> {
     if let Some(shell) = plan.resource_spec.shell {
         anyhow::ensure!(
@@ -418,11 +444,45 @@ fn append_launch_target(command: &mut Command, plan: &LaunchPlan) -> anyhow::Res
     Ok(())
 }
 
+fn render_launch_target_command(plan: &LaunchPlan) -> anyhow::Result<String> {
+    if let Some(shell) = plan.resource_spec.shell {
+        anyhow::ensure!(
+            plan.argv.len() == 1,
+            "shell launch plan requires exactly one script token"
+        );
+
+        return Ok(format!(
+            "{} -lc {}",
+            shell_program(shell).to_string_lossy(),
+            shell_escape(plan.argv[0].to_string_lossy().as_ref())
+        ));
+    }
+
+    anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
+    Ok(plan
+        .argv
+        .iter()
+        .map(|value| shell_escape(value.to_string_lossy().as_ref()))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
 fn shell_program(shell: ShellKind) -> &'static OsStr {
     match shell {
         ShellKind::Sh => OsStr::new("sh"),
         ShellKind::Bash => OsStr::new("bash"),
         ShellKind::Zsh => OsStr::new("zsh"),
+    }
+}
+
+fn shell_escape(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
     }
 }
 
