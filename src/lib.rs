@@ -1,14 +1,19 @@
-pub fn run() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    if matches!(args.next().as_deref(), Some("version")) {
-        println!(
-            "scaler {} {}-{}",
-            env!("CARGO_PKG_VERSION"),
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
-        return Ok(());
-    }
+pub mod cli;
+pub mod core;
 
-    anyhow::bail!("command not implemented yet")
+pub fn run() -> anyhow::Result<()> {
+    let cli = crate::cli::parse_from(std::env::args_os().collect())?;
+
+    match cli.command {
+        crate::cli::args::Command::Version => {
+            println!(
+                "scaler {} {}-{}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+            Ok(())
+        }
+        _ => anyhow::bail!("command not implemented yet"),
+    }
 }
