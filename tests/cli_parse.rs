@@ -85,6 +85,18 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
+            OsString::from("--cpu"),
+            OsString::from("1c"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("--cpu"),
+            OsString::from("1c"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
             OsString::from("--mem"),
             OsString::from("1g"),
             OsString::from("--"),
@@ -197,6 +209,16 @@ fn top_level_parse_behavior_is_preserved_for_help_version_and_unknowns() {
     let unknown_flag = parse_from(vec!["scaler".into(), "--foo".into()]).unwrap_err();
     assert_eq!(
         unknown_flag.downcast_ref::<clap::Error>().unwrap().kind(),
+        ErrorKind::UnknownArgument
+    );
+
+    let no_delimiter_cpu =
+        parse_from(vec!["scaler".into(), "--cpu".into(), "1c".into()]).unwrap_err();
+    assert_eq!(
+        no_delimiter_cpu
+            .downcast_ref::<clap::Error>()
+            .unwrap()
+            .kind(),
         ErrorKind::UnknownArgument
     );
 }

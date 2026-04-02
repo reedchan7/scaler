@@ -12,7 +12,7 @@ pub fn normalize_argv(raw: Vec<OsString>) -> Vec<OsString> {
     }
 
     let first = raw[1].as_os_str();
-    if first == OsStr::new("--") || is_run_shorthand_flag(first) {
+    if first == OsStr::new("--") || (is_run_shorthand_flag(first) && has_delimiter(&raw[2..])) {
         let mut normalized = raw;
         normalized.insert(1, OsString::from("run"));
         return normalized;
@@ -30,6 +30,12 @@ fn is_run_shorthand_flag(value: &OsStr) -> bool {
             || s == OsStr::new("--shell")
             || s == OsStr::new("--no-monitor")
     )
+}
+
+fn has_delimiter(values: &[OsString]) -> bool {
+    values
+        .iter()
+        .any(|value| value.as_os_str() == OsStr::new("--"))
 }
 
 pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {
