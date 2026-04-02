@@ -1,9 +1,9 @@
 use std::{
     ffi::OsString,
     io::{Read, Write},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::mpsc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -32,6 +32,7 @@ fn interrupt_plan_is_sigint_then_sigterm_then_sigkill() {
 
 #[test]
 fn execute_escalates_interrupts_in_order() {
+    let _guard = signal_test_guard();
     reset_test_state();
     set_test_poll_interval_for_next_run(Duration::from_millis(5));
     set_test_interrupt_plan_for_next_run(Duration::from_millis(20), Duration::from_millis(40));
@@ -66,6 +67,7 @@ fn execute_escalates_interrupts_in_order() {
 
 #[test]
 fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
+    let _guard = signal_test_guard();
     let mut child = std::process::Command::new(cargo_bin("scaler"))
         .args([
             "run",
@@ -76,18 +78,21 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap();
 
     let mut stdout = child.stdout.take().unwrap();
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let (tx, rx) = mpsc::channel::<[u8; 5]>();
+    let reader = std::thread::spawn(move || {
         let mut buffer = [0_u8; 5];
         stdout.read_exact(&mut buffer).unwrap();
         let _ = tx.send(buffer);
         let mut rest = Vec::new();
         let _ = stdout.read_to_end(&mut rest);
+        let mut full_output = buffer.to_vec();
+        full_output.extend(rest);
+        full_output
     });
 
     let first_bytes = rx.recv_timeout(Duration::from_millis(490)).unwrap();
@@ -100,15 +105,16 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
         .unwrap();
     assert!(signal_status.success());
 
-    let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(130));
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = child.wait().unwrap();
+    let stdout = String::from_utf8(reader.join().unwrap()).unwrap();
+    assert_eq!(resolved_code(status), Some(130));
     assert!(stdout.contains("exit_status:"));
     assert!(stdout.contains("runtime:"));
 }
 
 #[test]
 fn plain_fallback_termination_targets_the_process_group() {
+    let _guard = signal_test_guard();
     reset_test_state();
     set_test_poll_interval_for_next_run(Duration::from_millis(5));
     set_test_interrupt_plan_for_next_run(Duration::from_millis(20), Duration::from_millis(40));
@@ -249,5 +255,28 @@ fn host_platform() -> Platform {
         "linux" => Platform::Linux,
         "macos" => Platform::Macos,
         _ => Platform::Unsupported,
+    }
+}
+
+fn signal_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static SIGNAL_TEST_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    SIGNAL_TEST_GUARD.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+fn resolved_code(status: ExitStatus) -> Option<i32> {
+    if let Some(code) = status.code() {
+        return Some(code);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        return status.signal().map(|signal| 128 + signal);
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
     }
 }

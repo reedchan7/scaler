@@ -299,10 +299,6 @@ pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
-pub fn staged_interrupt_signals_for_test() -> [Signal; 3] {
-    [Signal::Interrupt, Signal::Terminate, Signal::Kill]
-}
-
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {
     let mut trace = execution_trace().lock().unwrap();
     std::mem::take(&mut trace.frames)
