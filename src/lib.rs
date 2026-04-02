@@ -2,7 +2,23 @@ pub mod cli;
 pub mod core;
 
 pub fn run() -> anyhow::Result<()> {
-    let cli = crate::cli::parse_from(std::env::args_os().collect())?;
+    let cli = match crate::cli::parse_from(std::env::args_os().collect()) {
+        Ok(cli) => cli,
+        Err(err) => match err.downcast::<clap::Error>() {
+            Ok(clap_err) => {
+                if matches!(
+                    clap_err.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                ) {
+                    clap_err.print()?;
+                    return Ok(());
+                }
+
+                return Err(clap_err.into());
+            }
+            Err(err) => return Err(err),
+        },
+    };
 
     match cli.command {
         crate::cli::args::Command::Version => {

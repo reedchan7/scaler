@@ -12,23 +12,24 @@ pub fn normalize_argv(raw: Vec<OsString>) -> Vec<OsString> {
     }
 
     let first = raw[1].as_os_str();
-    if matches!(
-        first,
-        s if s == OsStr::new("--help")
-            || s == OsStr::new("-h")
-            || s == OsStr::new("--version")
-            || s == OsStr::new("-V")
-    ) {
-        return raw;
-    }
-
-    if first == OsStr::new("--") || first.to_string_lossy().starts_with('-') {
+    if first == OsStr::new("--") || is_run_shorthand_flag(first) {
         let mut normalized = raw;
         normalized.insert(1, OsString::from("run"));
         return normalized;
     }
 
     raw
+}
+
+fn is_run_shorthand_flag(value: &OsStr) -> bool {
+    matches!(
+        value,
+        s if s == OsStr::new("--cpu")
+            || s == OsStr::new("--mem")
+            || s == OsStr::new("--interactive")
+            || s == OsStr::new("--shell")
+            || s == OsStr::new("--no-monitor")
+    )
 }
 
 pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {

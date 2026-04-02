@@ -1,4 +1,6 @@
+use assert_cmd::Command as AssertCommand;
 use clap::error::ErrorKind;
+use predicates::prelude::*;
 use scaler::cli::values::{CpuLimit, MemoryLimit};
 use scaler::cli::{args::Cli, normalize_argv, parse_from};
 use std::ffi::OsString;
@@ -45,7 +47,7 @@ fn shorthand_run_rewrites_without_guessing_shell() {
 }
 
 #[test]
-fn normalize_argv_only_rewrites_literal_delimiter_form() {
+fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
@@ -62,6 +64,91 @@ fn normalize_argv_only_rewrites_literal_delimiter_form() {
         ]
     );
     assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--cpu"),
+            OsString::from("1c"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--cpu"),
+            OsString::from("1c"),
+            OsString::from("--"),
+            OsString::from("echo"),
+            OsString::from("ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--mem"),
+            OsString::from("1g"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--mem"),
+            OsString::from("1g"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--interactive"),
+            OsString::from("never"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--interactive"),
+            OsString::from("never"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--shell"),
+            OsString::from("sh"),
+            OsString::from("--"),
+            OsString::from("echo ok"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--shell"),
+            OsString::from("sh"),
+            OsString::from("--"),
+            OsString::from("echo ok"),
+        ]
+    );
+    assert_eq!(
+        normalize_argv(vec![
+            OsString::from("scaler"),
+            OsString::from("--no-monitor"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]),
+        vec![
+            OsString::from("scaler"),
+            OsString::from("run"),
+            OsString::from("--no-monitor"),
+            OsString::from("--"),
+            OsString::from("echo"),
+        ]
+    );
+    assert_eq!(
         normalize_argv(vec![OsString::from("scaler"), OsString::from("--help")]),
         vec![OsString::from("scaler"), OsString::from("--help")]
     );
@@ -70,13 +157,25 @@ fn normalize_argv_only_rewrites_literal_delimiter_form() {
         vec![OsString::from("scaler"), OsString::from("--version")]
     );
     assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("-h")]),
+        vec![OsString::from("scaler"), OsString::from("-h")]
+    );
+    assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("-V")]),
+        vec![OsString::from("scaler"), OsString::from("-V")]
+    );
+    assert_eq!(
+        normalize_argv(vec![OsString::from("scaler"), OsString::from("--foo")]),
+        vec![OsString::from("scaler"), OsString::from("--foo")]
+    );
+    assert_eq!(
         normalize_argv(vec![OsString::from("scaler"), OsString::from("foo")]),
         vec![OsString::from("scaler"), OsString::from("foo")]
     );
 }
 
 #[test]
-fn top_level_help_version_and_unknown_command_keep_clap_behavior() {
+fn top_level_parse_behavior_is_preserved_for_help_version_and_unknowns() {
     let help = parse_from(vec!["scaler".into(), "--help".into()]).unwrap_err();
     assert_eq!(
         help.downcast_ref::<clap::Error>().unwrap().kind(),
@@ -94,6 +193,29 @@ fn top_level_help_version_and_unknown_command_keep_clap_behavior() {
         unknown.downcast_ref::<clap::Error>().unwrap().kind(),
         ErrorKind::InvalidSubcommand
     );
+
+    let unknown_flag = parse_from(vec!["scaler".into(), "--foo".into()]).unwrap_err();
+    assert_eq!(
+        unknown_flag.downcast_ref::<clap::Error>().unwrap().kind(),
+        ErrorKind::UnknownArgument
+    );
+}
+
+#[test]
+fn binary_help_and_version_exit_successfully() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage:"));
+
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
