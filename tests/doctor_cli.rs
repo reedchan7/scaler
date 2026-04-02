@@ -1,4 +1,15 @@
 use assert_cmd::Command;
+#[cfg(target_os = "linux")]
+use scaler::backend::linux_systemd::probe_linux_host;
+#[cfg(target_os = "macos")]
+use scaler::backend::macos_taskpolicy::probe_macos_host;
+use scaler::{
+    cli::render_doctor_output,
+    core::{
+        BackendKind, CapabilityLevel, CapabilityReport, DoctorPrerequisite, Platform,
+        PrerequisiteStatus,
+    },
+};
 
 #[test]
 fn doctor_prints_capability_states() {
@@ -17,9 +28,9 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
-        assert_eq!(lines[6], linux_prerequisite_line("cgroup_v2", &stdout));
-        assert_eq!(lines[7], linux_prerequisite_line("user_manager", &stdout));
-        assert_sorted_warning_lines(&lines[8..]);
+        let expected = linux_prerequisite_lines();
+        assert_eq!(&lines[6..6 + expected.len()], expected.as_slice());
+        assert_sorted_warning_lines(&lines[6 + expected.len()..]);
     } else if cfg!(target_os = "macos") {
         assert_core_lines(
             &lines,
@@ -32,12 +43,9 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
-        assert_eq!(lines[6], macos_prerequisite_line("taskpolicy", &stdout));
-        assert_eq!(
-            lines[7],
-            macos_prerequisite_line("platform_version", &stdout)
-        );
-        assert_sorted_warning_lines(&lines[8..]);
+        let expected = macos_prerequisite_lines();
+        assert_eq!(&lines[6..6 + expected.len()], expected.as_slice());
+        assert_sorted_warning_lines(&lines[6 + expected.len()..]);
     } else {
         let expected = concat!(
             "platform: unsupported\n",
@@ -84,6 +92,41 @@ fn doctor_uses_only_known_capability_words() {
     );
 }
 
+#[test]
+fn doctor_renderer_uses_structured_prerequisites_in_declared_order() {
+    let report = CapabilityReport {
+        platform: Platform::Linux,
+        backend: BackendKind::LinuxSystemd,
+        backend_state: CapabilityLevel::Unavailable,
+        cpu: CapabilityLevel::Unavailable,
+        memory: CapabilityLevel::Unavailable,
+        interactive: CapabilityLevel::Unavailable,
+        prerequisites: vec![
+            DoctorPrerequisite::check("systemd_run", PrerequisiteStatus::Missing),
+            DoctorPrerequisite::check("cgroup_v2", PrerequisiteStatus::Missing),
+            DoctorPrerequisite::check("user_manager", PrerequisiteStatus::Skipped),
+        ],
+        warnings: vec!["z warning".to_string(), "a warning".to_string()],
+    };
+
+    let stdout = render_doctor_output(&report);
+    let expected = concat!(
+        "platform: linux\n",
+        "backend: linux_systemd\n",
+        "backend_state: unavailable\n",
+        "cpu: unavailable\n",
+        "memory: unavailable\n",
+        "interactive: unavailable\n",
+        "prerequisite: systemd_run=missing\n",
+        "prerequisite: cgroup_v2=missing\n",
+        "prerequisite: user_manager=skipped\n",
+        "warning: a warning\n",
+        "warning: z warning",
+    );
+
+    assert_eq!(stdout, expected);
+}
+
 fn doctor_stdout() -> String {
     let output = Command::cargo_bin("scaler")
         .unwrap()
@@ -110,34 +153,66 @@ fn assert_sorted_warning_lines(lines: &[&str]) {
     assert!(lines.windows(2).all(|pair| pair[0] <= pair[1]));
 }
 
-fn linux_prerequisite_line(key: &str, stdout: &str) -> String {
-    let status = match key {
-        "cgroup_v2" if stdout.contains("warning: unified cgroup v2 is not available") => "missing",
-        "user_manager" if stdout.contains("warning: systemd user manager is unreachable") => {
-            "unreachable"
-        }
-        "cgroup_v2" | "user_manager" => "ok",
-        _ => unreachable!(),
-    };
+#[cfg(target_os = "linux")]
+fn linux_prerequisite_lines() -> Vec<String> {
+    let probe = probe_linux_host();
 
-    format!("prerequisite: {key}={status}")
+    vec![
+        format!(
+            "prerequisite: systemd_run={}",
+            if probe.has_systemd_run {
+                "ok"
+            } else {
+                "missing"
+            }
+        ),
+        format!(
+            "prerequisite: cgroup_v2={}",
+            if probe.has_cgroup_v2 { "ok" } else { "missing" }
+        ),
+        format!(
+            "prerequisite: user_manager={}",
+            if !probe.has_systemd_run {
+                "skipped"
+            } else if probe.user_manager_reachable {
+                "ok"
+            } else {
+                "unreachable"
+            }
+        ),
+    ]
 }
 
-fn macos_prerequisite_line(key: &str, stdout: &str) -> String {
-    let status = match key {
-        "taskpolicy" if stdout.contains("warning: taskpolicy is not available in PATH") => {
-            "missing"
-        }
-        "platform_version"
-            if stdout.contains(
-                "warning: macOS platform version is not supported by the taskpolicy backend",
-            ) =>
-        {
-            "unsupported"
-        }
-        "taskpolicy" | "platform_version" => "ok",
-        _ => unreachable!(),
-    };
+#[cfg(not(target_os = "linux"))]
+fn linux_prerequisite_lines() -> Vec<String> {
+    unreachable!()
+}
 
-    format!("prerequisite: {key}={status}")
+#[cfg(target_os = "macos")]
+fn macos_prerequisite_lines() -> Vec<String> {
+    let probe = probe_macos_host();
+
+    vec![
+        format!(
+            "prerequisite: taskpolicy={}",
+            if probe.has_taskpolicy {
+                "ok"
+            } else {
+                "missing"
+            }
+        ),
+        format!(
+            "prerequisite: platform_version={}",
+            if probe.platform_version_supported {
+                "ok"
+            } else {
+                "unsupported"
+            }
+        ),
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_prerequisite_lines() -> Vec<String> {
+    unreachable!()
 }

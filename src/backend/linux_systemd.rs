@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::Context;
 
-use crate::core::{BackendKind, CapabilityLevel, InteractiveMode, LaunchPlan, Platform, ShellKind};
+use crate::core::{
+    BackendKind, CapabilityLevel, DoctorPrerequisite, InteractiveMode, LaunchPlan, Platform,
+    PrerequisiteStatus, ShellKind,
+};
 
 pub struct LinuxProbe {
     pub has_systemd_run: bool,
@@ -91,6 +94,35 @@ pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityRe
         warnings.push("systemd user manager is unreachable".to_string());
     }
 
+    let prerequisites = vec![
+        DoctorPrerequisite::check(
+            "systemd_run",
+            if probe.has_systemd_run {
+                PrerequisiteStatus::Ok
+            } else {
+                PrerequisiteStatus::Missing
+            },
+        ),
+        DoctorPrerequisite::check(
+            "cgroup_v2",
+            if probe.has_cgroup_v2 {
+                PrerequisiteStatus::Ok
+            } else {
+                PrerequisiteStatus::Missing
+            },
+        ),
+        DoctorPrerequisite::check(
+            "user_manager",
+            if !probe.has_systemd_run {
+                PrerequisiteStatus::Skipped
+            } else if probe.user_manager_reachable {
+                PrerequisiteStatus::Ok
+            } else {
+                PrerequisiteStatus::Unreachable
+            },
+        ),
+    ];
+
     crate::core::CapabilityReport {
         platform: Platform::Linux,
         backend: BackendKind::LinuxSystemd,
@@ -98,6 +130,7 @@ pub fn detect_linux_capabilities(probe: LinuxProbe) -> crate::core::CapabilityRe
         cpu: enforced_when_ready,
         memory: enforced_when_ready,
         interactive: enforced_when_ready,
+        prerequisites,
         warnings,
     }
 }

@@ -82,6 +82,53 @@ impl CapabilityLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrerequisiteStatus {
+    Ok,
+    Missing,
+    Unreachable,
+    Unsupported,
+    Skipped,
+}
+
+impl PrerequisiteStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Missing => "missing",
+            Self::Unreachable => "unreachable",
+            Self::Unsupported => "unsupported",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoctorPrerequisite {
+    Check {
+        key: &'static str,
+        status: PrerequisiteStatus,
+    },
+    Note(&'static str),
+}
+
+impl DoctorPrerequisite {
+    pub fn check(key: &'static str, status: PrerequisiteStatus) -> Self {
+        Self::Check { key, status }
+    }
+
+    pub fn note(message: &'static str) -> Self {
+        Self::Note(message)
+    }
+
+    pub fn as_line(&self) -> String {
+        match self {
+            Self::Check { key, status } => format!("{key}={}", status.as_str()),
+            Self::Note(message) => (*message).to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     Interrupt,
     Terminate,
@@ -151,6 +198,7 @@ pub struct CapabilityReport {
     pub cpu: CapabilityLevel,
     pub memory: CapabilityLevel,
     pub interactive: CapabilityLevel,
+    pub prerequisites: Vec<DoctorPrerequisite>,
     pub warnings: Vec<String>,
 }
 
@@ -163,60 +211,24 @@ impl CapabilityReport {
             cpu: CapabilityLevel::Unavailable,
             memory: CapabilityLevel::Unavailable,
             interactive: CapabilityLevel::Unavailable,
+            prerequisites: vec![DoctorPrerequisite::note(
+                "no supported backend for this host",
+            )],
             warnings: Vec::new(),
         }
     }
 
     pub fn prerequisite_lines(&self) -> Vec<String> {
-        match self.platform {
-            Platform::Linux => vec![
-                format!(
-                    "cgroup_v2={}",
-                    if self.has_warning_containing("unified cgroup v2") {
-                        "missing"
-                    } else {
-                        "ok"
-                    }
-                ),
-                format!(
-                    "user_manager={}",
-                    if self.has_warning_containing("systemd user manager") {
-                        "unreachable"
-                    } else {
-                        "ok"
-                    }
-                ),
-            ],
-            Platform::Macos => vec![
-                format!(
-                    "taskpolicy={}",
-                    if self.has_warning_containing("taskpolicy is not available in PATH") {
-                        "missing"
-                    } else {
-                        "ok"
-                    }
-                ),
-                format!(
-                    "platform_version={}",
-                    if self.has_warning_containing("platform version is not supported") {
-                        "unsupported"
-                    } else {
-                        "ok"
-                    }
-                ),
-            ],
-            Platform::Unsupported => vec!["no supported backend for this host".to_string()],
-        }
+        self.prerequisites
+            .iter()
+            .map(DoctorPrerequisite::as_line)
+            .collect()
     }
 
     pub fn sorted_warnings(&self) -> Vec<&str> {
         let mut warnings = self.warnings.iter().map(String::as_str).collect::<Vec<_>>();
         warnings.sort_unstable();
         warnings
-    }
-
-    fn has_warning_containing(&self, needle: &str) -> bool {
-        self.warnings.iter().any(|warning| warning.contains(needle))
     }
 }
 

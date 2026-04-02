@@ -9,8 +9,8 @@ use std::{
 use anyhow::Context;
 
 use crate::core::{
-    BackendKind, CapabilityLevel, CapabilityReport, InteractiveMode, LaunchPlan, Platform,
-    ShellKind,
+    BackendKind, CapabilityLevel, CapabilityReport, DoctorPrerequisite, InteractiveMode,
+    LaunchPlan, Platform, PrerequisiteStatus, ShellKind,
 };
 
 pub struct MacosProbe {
@@ -108,6 +108,25 @@ pub fn detect_macos_capabilities(
         }
     };
 
+    let prerequisites = vec![
+        DoctorPrerequisite::check(
+            "taskpolicy",
+            if probe.has_taskpolicy {
+                PrerequisiteStatus::Ok
+            } else {
+                PrerequisiteStatus::Missing
+            },
+        ),
+        DoctorPrerequisite::check(
+            "platform_version",
+            if probe.platform_version_supported {
+                PrerequisiteStatus::Ok
+            } else {
+                PrerequisiteStatus::Unsupported
+            },
+        ),
+    ];
+
     CapabilityReport {
         platform: Platform::Macos,
         backend: BackendKind::MacosTaskpolicy,
@@ -115,6 +134,7 @@ pub fn detect_macos_capabilities(
         cpu,
         memory,
         interactive,
+        prerequisites,
         warnings,
     }
 }
