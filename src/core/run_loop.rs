@@ -89,14 +89,17 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
             finalize_process_output(handle.root_pid, control_interval)?;
             remove_process_state(handle.root_pid);
             record_event("restore_terminal");
-            clear_runtime_overrides();
-
-            return Ok(RunOutcome {
+            let outcome = RunOutcome {
                 exit_status,
                 runtime: runtime_since(started_at),
                 peak_memory,
                 samples,
-            });
+            };
+            println!("{}", crate::core::summary::render(&outcome));
+            record_event("render_summary");
+            clear_runtime_overrides();
+
+            return Ok(outcome);
         }
 
         if interrupt_started_at.is_none() && INTERRUPT_REQUESTED.swap(false, Ordering::SeqCst) {
@@ -151,10 +154,6 @@ impl Drop for SignalBridgeGuard {
     fn drop(&mut self) {
         SIGNAL_BRIDGE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
     }
-}
-
-pub(crate) fn record_summary_rendered() {
-    record_event("render_summary");
 }
 
 impl Backend for PlainFallbackBackend {
@@ -296,7 +295,7 @@ pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
 }
 
 pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
-    Vec::new()
+    recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {

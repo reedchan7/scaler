@@ -97,7 +97,7 @@ fn plain_fallback_executes_real_command_and_collects_output_frames() {
     );
     assert_eq!(
         record_summary_timeline_for_test(),
-        vec!["launch", "restore_terminal"]
+        vec!["launch", "restore_terminal", "render_summary"]
     );
     assert_eq!(
         record_interactive_mode_for_test(),
