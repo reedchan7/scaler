@@ -296,7 +296,7 @@ pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
 }
 
 pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
-    recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
+    Vec::new()
 }
 
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {
