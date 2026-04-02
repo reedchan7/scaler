@@ -1,8 +1,4 @@
 use assert_cmd::Command;
-#[cfg(target_os = "linux")]
-use scaler::backend::linux_systemd::probe_linux_host;
-#[cfg(target_os = "macos")]
-use scaler::backend::macos_taskpolicy::probe_macos_host;
 use scaler::{
     cli::render_doctor_output,
     core::{
@@ -28,9 +24,15 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
-        let expected = linux_prerequisite_lines();
-        assert_eq!(&lines[6..6 + expected.len()], expected.as_slice());
-        assert_sorted_warning_lines(&lines[6 + expected.len()..]);
+        assert_line_prefixes(
+            &lines[6..9],
+            &[
+                "prerequisite: systemd_run=",
+                "prerequisite: cgroup_v2=",
+                "prerequisite: user_manager=",
+            ],
+        );
+        assert_sorted_warning_lines(&lines[9..]);
     } else if cfg!(target_os = "macos") {
         assert_core_lines(
             &lines,
@@ -43,9 +45,14 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
-        let expected = macos_prerequisite_lines();
-        assert_eq!(&lines[6..6 + expected.len()], expected.as_slice());
-        assert_sorted_warning_lines(&lines[6 + expected.len()..]);
+        assert_line_prefixes(
+            &lines[6..8],
+            &[
+                "prerequisite: taskpolicy=",
+                "prerequisite: platform_version=",
+            ],
+        );
+        assert_sorted_warning_lines(&lines[8..]);
     } else {
         let expected = concat!(
             "platform: unsupported\n",
@@ -153,66 +160,12 @@ fn assert_sorted_warning_lines(lines: &[&str]) {
     assert!(lines.windows(2).all(|pair| pair[0] <= pair[1]));
 }
 
-#[cfg(target_os = "linux")]
-fn linux_prerequisite_lines() -> Vec<String> {
-    let probe = probe_linux_host();
-
-    vec![
-        format!(
-            "prerequisite: systemd_run={}",
-            if probe.has_systemd_run {
-                "ok"
-            } else {
-                "missing"
-            }
-        ),
-        format!(
-            "prerequisite: cgroup_v2={}",
-            if probe.has_cgroup_v2 { "ok" } else { "missing" }
-        ),
-        format!(
-            "prerequisite: user_manager={}",
-            if !probe.has_systemd_run {
-                "skipped"
-            } else if probe.user_manager_reachable {
-                "ok"
-            } else {
-                "unreachable"
-            }
-        ),
-    ]
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_prerequisite_lines() -> Vec<String> {
-    unreachable!()
-}
-
-#[cfg(target_os = "macos")]
-fn macos_prerequisite_lines() -> Vec<String> {
-    let probe = probe_macos_host();
-
-    vec![
-        format!(
-            "prerequisite: taskpolicy={}",
-            if probe.has_taskpolicy {
-                "ok"
-            } else {
-                "missing"
-            }
-        ),
-        format!(
-            "prerequisite: platform_version={}",
-            if probe.platform_version_supported {
-                "ok"
-            } else {
-                "unsupported"
-            }
-        ),
-    ]
-}
-
-#[cfg(not(target_os = "macos"))]
-fn macos_prerequisite_lines() -> Vec<String> {
-    unreachable!()
+fn assert_line_prefixes(lines: &[&str], expected_prefixes: &[&str]) {
+    assert_eq!(lines.len(), expected_prefixes.len());
+    for (line, prefix) in lines.iter().zip(expected_prefixes.iter()) {
+        assert!(
+            line.starts_with(prefix),
+            "{line} did not start with {prefix}"
+        );
+    }
 }

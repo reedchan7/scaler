@@ -60,16 +60,41 @@ pub fn render_doctor_output(report: &crate::core::CapabilityReport) -> String {
 
     lines.extend(
         report
-            .prerequisite_lines()
-            .into_iter()
+            .prerequisites
+            .iter()
+            .map(render_doctor_prerequisite)
             .map(|prerequisite| format!("prerequisite: {prerequisite}")),
     );
     lines.extend(
-        report
-            .sorted_warnings()
+        sorted_warning_lines(&report.warnings)
             .into_iter()
             .map(|warning| format!("warning: {warning}")),
     );
 
     lines.join("\n")
+}
+
+fn render_doctor_prerequisite(prerequisite: &crate::core::DoctorPrerequisite) -> String {
+    match prerequisite {
+        crate::core::DoctorPrerequisite::Check { key, status } => {
+            format!("{key}={}", render_prerequisite_status(*status))
+        }
+        crate::core::DoctorPrerequisite::Note(message) => (*message).to_string(),
+    }
+}
+
+fn render_prerequisite_status(status: crate::core::PrerequisiteStatus) -> &'static str {
+    match status {
+        crate::core::PrerequisiteStatus::Ok => "ok",
+        crate::core::PrerequisiteStatus::Missing => "missing",
+        crate::core::PrerequisiteStatus::Unreachable => "unreachable",
+        crate::core::PrerequisiteStatus::Unsupported => "unsupported",
+        crate::core::PrerequisiteStatus::Skipped => "skipped",
+    }
+}
+
+fn sorted_warning_lines<'a>(warnings: &'a [String]) -> Vec<&'a str> {
+    let mut warnings = warnings.iter().map(String::as_str).collect::<Vec<_>>();
+    warnings.sort_unstable();
+    warnings
 }

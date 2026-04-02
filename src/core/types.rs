@@ -90,18 +90,6 @@ pub enum PrerequisiteStatus {
     Skipped,
 }
 
-impl PrerequisiteStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Missing => "missing",
-            Self::Unreachable => "unreachable",
-            Self::Unsupported => "unsupported",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DoctorPrerequisite {
     Check {
@@ -118,13 +106,6 @@ impl DoctorPrerequisite {
 
     pub fn note(message: &'static str) -> Self {
         Self::Note(message)
-    }
-
-    pub fn as_line(&self) -> String {
-        match self {
-            Self::Check { key, status } => format!("{key}={}", status.as_str()),
-            Self::Note(message) => (*message).to_string(),
-        }
     }
 }
 
@@ -216,19 +197,6 @@ impl CapabilityReport {
             )],
             warnings: Vec::new(),
         }
-    }
-
-    pub fn prerequisite_lines(&self) -> Vec<String> {
-        self.prerequisites
-            .iter()
-            .map(DoctorPrerequisite::as_line)
-            .collect()
-    }
-
-    pub fn sorted_warnings(&self) -> Vec<&str> {
-        let mut warnings = self.warnings.iter().map(String::as_str).collect::<Vec<_>>();
-        warnings.sort_unstable();
-        warnings
     }
 }
 
