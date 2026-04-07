@@ -126,9 +126,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-tag.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          if gh release view "${VERSION}" >/dev/null 2>&1; then
-            gh release upload "${VERSION}" release-artifacts/* --clobber
+          if gh release view "${VERSION}" -R "${REPO}" >/dev/null 2>&1; then
+            gh release upload "${VERSION}" release-artifacts/* --clobber -R "${REPO}"
           else
-            gh release create "${VERSION}" release-artifacts/* --title "${VERSION}" --generate-notes
+            gh release create "${VERSION}" release-artifacts/* \
+              --title "${VERSION}" --generate-notes -R "${REPO}"
           fi
