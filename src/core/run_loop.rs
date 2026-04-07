@@ -357,9 +357,7 @@ impl Backend for PlainFallbackBackend {
         &self,
         handle: &mut RunningHandle,
     ) -> anyhow::Result<Option<std::process::ExitStatus>> {
-        let state = process_state(handle.root_pid)
-            .with_context(|| format!("missing process state for pid {}", handle.root_pid))?;
-        Ok(state.child.lock().unwrap().try_wait()?)
+        try_wait_via_registry(handle.root_pid)
     }
 
     fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
@@ -367,29 +365,7 @@ impl Backend for PlainFallbackBackend {
     }
 
     fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
-        let signal_flag = match signal {
-            Signal::Interrupt => "-INT",
-            Signal::Terminate => "-TERM",
-            Signal::Kill => "-KILL",
-        };
-        let process_group = format!("-{}", handle.root_pid);
-        let status = Command::new("kill")
-            .arg(signal_flag)
-            .arg("--")
-            .arg(&process_group)
-            .status()
-            .with_context(|| {
-                format!(
-                    "failed to send {signal_flag} to process group {}",
-                    handle.root_pid
-                )
-            })?;
-        anyhow::ensure!(
-            status.success(),
-            "kill command exited unsuccessfully for process group {}",
-            handle.root_pid
-        );
-        Ok(())
+        terminate_process_group(handle.root_pid, signal)
     }
 }
 
@@ -508,7 +484,7 @@ struct RuntimeOverrides {
 static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_BRIDGE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
-fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
+pub(crate) fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
     match interactive_mode {
         InteractiveMode::Always => IoMode::Pty,
         InteractiveMode::Auto | InteractiveMode::Never => IoMode::Pipes,
@@ -870,11 +846,40 @@ fn runtime_since(started_at: SystemTime) -> Duration {
         .unwrap_or_default()
 }
 
+/// Polls the registered process for the given pid and returns its exit
+/// status if available. Used by all platform backend `try_wait` impls.
+pub fn try_wait_via_registry(root_pid: u32) -> anyhow::Result<Option<std::process::ExitStatus>> {
+    let state = process_state(root_pid)
+        .with_context(|| format!("missing process state for pid {root_pid}"))?;
+    Ok(state.child.lock().unwrap().try_wait()?)
+}
+
+/// Sends `signal` to the process group rooted at `root_pid`. Used by all
+/// platform backend `terminate` impls.
+pub fn terminate_process_group(root_pid: u32, signal: Signal) -> anyhow::Result<()> {
+    let signal_flag = match signal {
+        Signal::Interrupt => "-INT",
+        Signal::Terminate => "-TERM",
+        Signal::Kill => "-KILL",
+    };
+    let process_group = format!("-{root_pid}");
+    let status = Command::new("kill")
+        .arg(signal_flag)
+        .arg("--")
+        .arg(&process_group)
+        .status()
+        .with_context(|| format!("failed to send {signal_flag} to process group {root_pid}"))?;
+    anyhow::ensure!(
+        status.success(),
+        "kill command exited unsuccessfully for process group {root_pid}"
+    );
+    Ok(())
+}
+
 /// Build a `Command` from a flat argv (`argv[0]` is the program). Wires
 /// stdio for pipe vs PTY mode and puts the child in its own process group
 /// on unix. This is the only place that knows how to materialize a child
 /// process for ANY backend that already produced a complete argv.
-#[allow(dead_code)]
 pub(crate) fn command_from_argv(
     argv: &[std::ffi::OsString],
     io_mode: IoMode,

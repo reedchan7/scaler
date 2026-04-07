@@ -8,9 +8,14 @@ use std::{
 
 use anyhow::Context;
 
+use crate::backend::Backend;
+use crate::core::run_loop::{
+    command_from_argv, preferred_io_mode, spawn_with_bookkeeping, terminate_process_group,
+    try_wait_via_registry,
+};
 use crate::core::{
     BackendKind, CapabilityLevel, CapabilityReport, DoctorPrerequisite, InteractiveMode,
-    LaunchPlan, Platform, PrerequisiteStatus, ShellKind,
+    LaunchPlan, Platform, PrerequisiteStatus, RunningHandle, Sample, ShellKind, Signal,
 };
 
 pub struct MacosProbe {
@@ -21,7 +26,10 @@ pub struct MacosProbe {
     pub platform_version_supported: bool,
 }
 
-pub fn build_taskpolicy_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
+pub fn build_taskpolicy_argv(
+    plan: &LaunchPlan,
+    include_memory_flag: bool,
+) -> anyhow::Result<Vec<OsString>> {
     anyhow::ensure!(
         plan.platform == Platform::Macos,
         "macos taskpolicy backend requires a macos launch plan"
@@ -38,7 +46,7 @@ pub fn build_taskpolicy_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>>
         OsString::from("--"),
     ];
 
-    if let Some(mem) = plan.resource_spec.mem {
+    if include_memory_flag && let Some(mem) = plan.resource_spec.mem {
         let mib = mem.bytes().div_ceil(1_048_576);
         argv.pop();
         argv.push(OsString::from("-m"));
@@ -227,4 +235,47 @@ fn run_quiet_command<const N: usize>(program: &str, args: [&str; N]) -> bool {
         Ok(status) => status.success(),
         Err(_) => false,
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacosTaskpolicyBackend;
+
+impl Backend for MacosTaskpolicyBackend {
+    fn detect(&self) -> crate::core::CapabilityReport {
+        detect_macos_capabilities(probe_macos_host(), InteractiveMode::Auto)
+    }
+
+    fn launch(&self, plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
+        let io_mode = preferred_io_mode(plan.resource_spec.interactive);
+        let probe = probe_macos_host();
+        let argv = build_taskpolicy_argv(plan, probe.has_memory_support)?;
+        let command = command_from_argv(&argv, io_mode)?;
+        spawn_with_bookkeeping(command, io_mode)
+    }
+
+    fn try_wait(
+        &self,
+        handle: &mut RunningHandle,
+    ) -> anyhow::Result<Option<std::process::ExitStatus>> {
+        try_wait_via_registry(handle.root_pid)
+    }
+
+    fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
+        crate::core::sampling::sample_process_tree(handle.root_pid)
+    }
+
+    fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
+        terminate_process_group(handle.root_pid, signal)
+    }
+}
+
+/// Test seam: returns the argv that `MacosTaskpolicyBackend.launch` would
+/// hand to `command_from_argv`. Used by integration tests so they can
+/// assert on the wiring without spawning a real process.
+#[doc(hidden)]
+pub fn macos_taskpolicy_command_preview_for_test(
+    plan: &LaunchPlan,
+    include_memory_flag: bool,
+) -> anyhow::Result<Vec<std::ffi::OsString>> {
+    build_taskpolicy_argv(plan, include_memory_flag)
 }

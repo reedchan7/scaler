@@ -139,9 +139,21 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Missing);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Skipped);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Missing,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[2],
+            "user_manager",
+            PrerequisiteStatus::Skipped,
+        );
         assert!(
             report
                 .warnings
@@ -183,9 +195,21 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Missing);
-        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Ok);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Missing,
+        );
+        assert_prerequisite(
+            &report.prerequisites[2],
+            "user_manager",
+            PrerequisiteStatus::Ok,
+        );
         assert!(
             report
                 .warnings
@@ -206,8 +230,16 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Ok,
+        );
         assert_prerequisite(
             &report.prerequisites[2],
             "user_manager",
@@ -219,6 +251,49 @@ mod linux_tests {
                 .iter()
                 .any(|warning| warning.contains("user manager"))
         );
+    }
+
+    #[test]
+    fn linux_backend_command_preview_includes_systemd_run_and_resource_properties() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("/bin/echo"), OsString::from("hi")],
+            resource_spec: ResourceSpec {
+                cpu: Some(CpuLimit::from_centi_cores(50)),
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: false,
+            },
+            platform: Platform::Linux,
+        };
+
+        let preview =
+            scaler::backend::linux_systemd::linux_systemd_command_preview_for_test(&plan).unwrap();
+        let preview = preview
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(preview[0], "systemd-run");
+        assert!(preview.iter().any(|value| value == "--user"));
+        assert!(preview.iter().any(|value| value == "--scope"));
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=CPUQuota=50%")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=MemoryMax=67108864")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=MemorySwapMax=0")
+        );
+        let dash_dash = preview.iter().position(|value| value == "--").unwrap();
+        assert_eq!(&preview[dash_dash + 1..], &["/bin/echo", "hi"]);
     }
 
     fn assert_prerequisite(

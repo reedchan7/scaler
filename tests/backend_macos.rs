@@ -282,7 +282,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, true).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -306,7 +306,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, true).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -329,7 +329,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let error = build_taskpolicy_argv(&plan).unwrap_err().to_string();
+        let error = build_taskpolicy_argv(&plan, true).unwrap_err().to_string();
 
         assert!(error.contains("exactly one script token"));
     }
@@ -342,7 +342,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, false).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -380,7 +380,7 @@ mod macos_tests {
                 platform: Platform::Macos,
             };
 
-            let argv = build_taskpolicy_argv(&plan).unwrap();
+            let argv = build_taskpolicy_argv(&plan, true).unwrap();
             let argv = argv
                 .iter()
                 .map(|value| value.to_string_lossy().into_owned())
@@ -415,5 +415,59 @@ mod macos_tests {
         assert_eq!(report.memory, CapabilityLevel::BestEffort);
         assert_eq!(report.interactive, CapabilityLevel::BestEffort);
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn macos_command_omits_memory_flag_when_unsupported() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo"), OsString::from("ok")],
+            resource_spec: ResourceSpec {
+                cpu: None,
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: true,
+            },
+            platform: Platform::Macos,
+        };
+
+        let argv = build_taskpolicy_argv(&plan, false).unwrap();
+        let argv = argv
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(!argv.iter().any(|value| value == "-m"));
+        assert_eq!(&argv[argv.len() - 2..], ["echo", "ok"]);
+    }
+
+    #[test]
+    fn macos_backend_command_preview_uses_taskpolicy() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("/bin/echo"), OsString::from("hi")],
+            resource_spec: ResourceSpec {
+                cpu: Some(CpuLimit::from_centi_cores(100)),
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: false,
+            },
+            platform: Platform::Macos,
+        };
+
+        let preview = scaler::backend::macos_taskpolicy::macos_taskpolicy_command_preview_for_test(
+            &plan, true,
+        )
+        .unwrap();
+        let preview = preview
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(preview[0], "taskpolicy");
+        assert!(preview.iter().any(|value| value == "-d"));
+        assert!(preview.iter().any(|value| value == "-g"));
+        assert!(preview.iter().any(|value| value == "-m"));
+        assert_eq!(&preview[preview.len() - 2..], ["/bin/echo", "hi"]);
     }
 }
