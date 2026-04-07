@@ -51,6 +51,7 @@ impl Platform {
 pub enum BackendKind {
     LinuxSystemd,
     MacosTaskpolicy,
+    PlainFallback,
     Unsupported,
 }
 
@@ -59,6 +60,7 @@ impl BackendKind {
         match self {
             Self::LinuxSystemd => "linux_systemd",
             Self::MacosTaskpolicy => "macos_taskpolicy",
+            Self::PlainFallback => "plain_fallback",
             Self::Unsupported => "unsupported",
         }
     }
