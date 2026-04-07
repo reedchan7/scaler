@@ -1,3 +1,11 @@
 /target
 /.DS_Store
-/.superpowers
+
+# Local-only Claude Code workspace state.
+/.claude/
+
+# Local-only design notes and implementation plans. Useful when running
+# Claude Code or similar agents against the repo, but not part of the
+# public source distribution.
+/docs/superpowers/
+/.superpowers/

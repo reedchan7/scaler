@@ -1,12 +1,19 @@
 [package]
 name = "scaler"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2024"
+license = "MIT"
+description = "Wrap a command with CPU and memory limits — real cgroup v2 on Linux, best-effort on macOS."
+repository = "https://github.com/reedchan7/scaler"
+readme = "README.md"
+keywords = ["cgroup", "systemd", "cpu-limit", "memory-limit", "cli"]
+categories = ["command-line-utilities", "os"]
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
+ctrlc = "3"
 ratatui = "0.29"
 rust_decimal = "1"
 thiserror = "2"
