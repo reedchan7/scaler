@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use crate::core::Sample;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PsRow {
+pub(crate) struct PsRow {
     pub pid: u32,
     pub ppid: u32,
     pub rss_kib: u64,
@@ -14,13 +14,13 @@ pub struct PsRow {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct AggregatedMetrics {
+pub(crate) struct AggregatedMetrics {
     pub rss_bytes: u64,
     pub cpu_percent: f32,
     pub process_count: u32,
 }
 
-pub fn parse_ps_table(input: &str) -> Vec<PsRow> {
+pub(crate) fn parse_ps_table(input: &str) -> Vec<PsRow> {
     input
         .lines()
         .filter_map(|line| {
@@ -39,7 +39,7 @@ pub fn parse_ps_table(input: &str) -> Vec<PsRow> {
         .collect()
 }
 
-pub fn aggregate_descendants(rows: &[PsRow], root_pid: u32) -> AggregatedMetrics {
+pub(crate) fn aggregate_descendants(rows: &[PsRow], root_pid: u32) -> AggregatedMetrics {
     // If the root pid disappeared between our process_state lookup and the
     // ps snapshot, return zero metrics rather than fabricating partial
     // numbers from any orphaned descendants that are still in the table.

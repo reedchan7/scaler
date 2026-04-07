@@ -369,14 +369,17 @@ impl Backend for PlainFallbackBackend {
     }
 }
 
+#[doc(hidden)]
 pub fn record_summary_timeline_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["launch", "restore_terminal", "render_summary"])
 }
 
+#[doc(hidden)]
 pub fn record_monitor_fallback_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_unavailable", "plain_renderer_active"])
 }
 
+#[doc(hidden)]
 pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
     recorded_events_matching(&[
         "interactive_mode_selected",
@@ -385,10 +388,12 @@ pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
     ])
 }
 
+#[doc(hidden)]
 pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
+#[doc(hidden)]
 pub fn record_ui_mode_for_test() -> Vec<&'static str> {
     recorded_events_matching(&[
         "tui_renderer_active",
@@ -397,24 +402,29 @@ pub fn record_ui_mode_for_test() -> Vec<&'static str> {
     ])
 }
 
+#[doc(hidden)]
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {
     let mut trace = execution_trace().lock().unwrap();
     std::mem::take(&mut trace.frames)
 }
 
+#[doc(hidden)]
 pub fn reset_test_state() {
     clear_execution_trace();
     clear_runtime_overrides();
 }
 
+#[doc(hidden)]
 pub fn request_interrupt_for_test() {
     INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+#[doc(hidden)]
 pub fn set_test_poll_interval_for_next_run(duration: Duration) {
     runtime_overrides().lock().unwrap().poll_interval = Some(duration);
 }
 
+#[doc(hidden)]
 pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_after: Duration) {
     runtime_overrides().lock().unwrap().interrupt_plan = Some(InterruptPlan {
         sigterm_after,
@@ -422,6 +432,7 @@ pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_aft
     });
 }
 
+#[doc(hidden)]
 pub fn set_test_terminal_state_for_next_run(stdin: bool, stdout: bool, stderr: bool) {
     runtime_overrides().lock().unwrap().terminal_state = Some(TerminalState {
         stdin,
@@ -430,14 +441,17 @@ pub fn set_test_terminal_state_for_next_run(stdin: bool, stdout: bool, stderr: b
     });
 }
 
+#[doc(hidden)]
 pub fn set_test_monitor_start_failure_for_next_run(message: &str) {
     runtime_overrides().lock().unwrap().monitor_start_failure = Some(message.to_string());
 }
 
+#[doc(hidden)]
 pub fn set_test_monitor_fail_after_launch_for_next_run(draws_before_failure: usize) {
     runtime_overrides().lock().unwrap().monitor_fail_after_draws = Some(draws_before_failure);
 }
 
+#[doc(hidden)]
 pub fn plain_fallback_command_preview_for_test(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
     let io_mode = preferred_io_mode(plan.resource_spec.interactive);
     let command = build_local_command(plan, io_mode)?;
