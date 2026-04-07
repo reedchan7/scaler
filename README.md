@@ -2,6 +2,28 @@
 
 `scaler` is a small CLI for launching a command with normalized CPU/memory flags, deterministic capability reporting, and a compact monitor-oriented run flow.
 
+## Install
+
+### From a release tarball (Linux x86_64)
+
+```bash
+VERSION=v0.2.0
+TARGET=x86_64-unknown-linux-gnu
+curl -fsSL "https://github.com/reedchan7/scaler/releases/download/${VERSION}/scaler-${VERSION}-${TARGET}.tar.gz" \
+  | tar -xz -C /tmp
+sudo install -m 0755 "/tmp/scaler-${VERSION}-${TARGET}/scaler" /usr/local/bin/scaler
+scaler doctor
+```
+
+If `scaler doctor` reports `effective_backend: plain_fallback` on a Linux host, your user systemd manager is not reachable and resource limits will not be enforced. Enable lingering for your user (`sudo loginctl enable-linger "$USER"`), log out and back in, then re-run `scaler doctor`. Once the doctor reports `effective_backend: linux_systemd`, `scaler run --cpu 0.5c --mem 64m -- <cmd>` will actually constrain the command via a transient systemd scope.
+
+### From source
+
+```bash
+cargo build --release
+./target/release/scaler doctor
+```
+
 ## Supported command forms
 
 Explicit subcommand form:
