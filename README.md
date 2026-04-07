@@ -4,11 +4,19 @@
 
 ## Install
 
-### From a release tarball (Linux x86_64)
+### From a release tarball
+
+Pick the right `TARGET` for your host:
+
+| Host | `TARGET` |
+| --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` |
+| Linux ARM64 (aarch64) | `aarch64-unknown-linux-gnu` |
+| macOS Apple Silicon | `aarch64-apple-darwin` |
 
 ```bash
 VERSION=v0.2.0
-TARGET=x86_64-unknown-linux-gnu
+TARGET=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu / aarch64-apple-darwin
 curl -fsSL "https://github.com/reedchan7/scaler/releases/download/${VERSION}/scaler-${VERSION}-${TARGET}.tar.gz" \
   | tar -xz -C /tmp
 sudo install -m 0755 "/tmp/scaler-${VERSION}-${TARGET}/scaler" /usr/local/bin/scaler

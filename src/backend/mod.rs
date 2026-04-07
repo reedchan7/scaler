@@ -1,6 +1,7 @@
+#[cfg(target_os = "macos")]
+use crate::core::InteractiveMode;
 use crate::core::{
-    BackendKind, CapabilityLevel, CapabilityReport, InteractiveMode, LaunchPlan, RunningHandle,
-    Sample, Signal,
+    BackendKind, CapabilityLevel, CapabilityReport, LaunchPlan, RunningHandle, Sample, Signal,
 };
 
 #[cfg(target_os = "linux")]

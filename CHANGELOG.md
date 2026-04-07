@@ -25,6 +25,9 @@ All notable changes to scaler are documented in this file.
   or `plain_fallback`).
 - `Backend::sample` now aggregates RSS and CPU across the entire descendant
   process tree of the launched command, not just the root pid.
+- Release tarballs now ship `aarch64-unknown-linux-gnu` (Linux ARM64)
+  alongside `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`. CI now
+  exercises Linux ARM64 too via the `ubuntu-24.04-arm` runner.
 - New `SCALER_FORCE_BACKEND` test escape hatch (intended for integration
   tests, not user-facing API).
 

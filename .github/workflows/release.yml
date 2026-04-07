@@ -62,13 +62,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # TODO(arm64): add aarch64-unknown-linux-gnu (cross-compile or ARM runner)
-      # and x86_64-apple-darwin once we need them. Tracked in README install section.
+      # TODO: add x86_64-apple-darwin once Intel macOS users need it.
       matrix:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive_name: scaler-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_name: scaler-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             archive_name: scaler-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
