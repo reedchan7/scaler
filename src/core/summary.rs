@@ -116,18 +116,70 @@ fn format_cpu_stats(stats: CpuStats) -> String {
 
 fn format_exit_status(status: ExitStatus) -> String {
     if let Some(code) = status.code() {
-        return code.to_string();
+        if code == 0 {
+            return "0 (success)".to_string();
+        }
+        // Shell convention: codes 129..=159 mean "terminated by signal N"
+        // where N = code - 128. Decode the well-known signals; everything
+        // else falls back to a generic `(failure, signal N)` label.
+        if (129..=159).contains(&code) {
+            let signal = code - 128;
+            if let Some(name) = signal_name(signal) {
+                let verb = signal_verb(signal);
+                return format!("{code} ({verb} by {name})");
+            }
+            return format!("{code} (failure, signal {signal})");
+        }
+        return format!("{code} (failure)");
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signal) = status.signal() {
+            if let Some(name) = signal_name(signal) {
+                return format!("signal {signal} ({name})");
+            }
             return format!("signal {signal}");
         }
     }
 
     status.to_string()
+}
+
+/// Maps the 8 signal numbers most likely to terminate a wrapped command
+/// to their canonical names. We deliberately do not enumerate the entire
+/// `signal(7)` table — anything outside this set falls back to a numeric
+/// label so the user still has *something* to grep for.
+fn signal_name(signal: i32) -> Option<&'static str> {
+    match signal {
+        1 => Some("SIGHUP"),
+        2 => Some("SIGINT"),
+        3 => Some("SIGQUIT"),
+        6 => Some("SIGABRT"),
+        9 => Some("SIGKILL"),
+        11 => Some("SIGSEGV"),
+        13 => Some("SIGPIPE"),
+        15 => Some("SIGTERM"),
+        _ => None,
+    }
+}
+
+/// English verb for each signal in the `signal_name` table. Used so the
+/// rendered exit row reads like `137 (killed by SIGKILL)` instead of the
+/// awkward `137 (terminated by SIGKILL)`.
+fn signal_verb(signal: i32) -> &'static str {
+    match signal {
+        1 => "hangup",
+        2 => "interrupted",
+        3 => "quit",
+        6 => "aborted",
+        9 => "killed",
+        11 => "segfaulted",
+        13 => "pipe-broken",
+        15 => "terminated",
+        _ => "terminated",
+    }
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -380,16 +432,56 @@ mod tests {
     }
 
     #[test]
-    fn format_exit_status_prints_numeric_code_for_normal_exit() {
+    fn format_exit_status_zero_reads_as_success() {
         let status = RunOutcome::fixture_for_test().exit_status;
-        assert_eq!(format_exit_status(status), "0");
+        assert_eq!(format_exit_status(status), "0 (success)");
     }
 
     #[cfg(unix)]
     #[test]
-    fn format_exit_status_reports_signal_number_when_terminated() {
+    fn format_exit_status_nonzero_reads_as_failure() {
+        use std::os::unix::process::ExitStatusExt;
+        // Code 1 (raw 256 because exit() shifts left by 8 on unix wait status).
+        let status = ExitStatus::from_raw(1 << 8);
+        assert_eq!(format_exit_status(status), "1 (failure)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_decodes_known_signal_codes() {
+        use std::os::unix::process::ExitStatusExt;
+        // Code 128 + 2 (SIGINT) — process exited via the shell convention.
+        let status = ExitStatus::from_raw((128 + 2) << 8);
+        assert_eq!(format_exit_status(status), "130 (interrupted by SIGINT)");
+
+        let status = ExitStatus::from_raw((128 + 9) << 8);
+        assert_eq!(format_exit_status(status), "137 (killed by SIGKILL)");
+
+        let status = ExitStatus::from_raw((128 + 15) << 8);
+        assert_eq!(format_exit_status(status), "143 (terminated by SIGTERM)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_unknown_signal_code_falls_back_to_failure() {
+        use std::os::unix::process::ExitStatusExt;
+        // Code 128 + 4 (SIGILL) — not in our 8-signal table.
+        let status = ExitStatus::from_raw((128 + 4) << 8);
+        assert_eq!(format_exit_status(status), "132 (failure, signal 4)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_reports_signal_number_with_name_when_terminated() {
         let status = exit_status_from_signal(9);
-        assert_eq!(format_exit_status(status), "signal 9");
+        assert_eq!(format_exit_status(status), "signal 9 (SIGKILL)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_exit_status_reports_unknown_signal_number_without_name() {
+        let status = exit_status_from_signal(31);
+        assert_eq!(format_exit_status(status), "signal 31");
     }
 
     #[test]
