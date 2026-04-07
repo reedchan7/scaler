@@ -349,43 +349,8 @@ impl Backend for PlainFallbackBackend {
 
     fn launch(&self, plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
         let io_mode = preferred_io_mode(plan.resource_spec.interactive);
-        let mut command = build_local_command(plan, io_mode)?;
-        let launched_at = SystemTime::now();
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to launch fallback command: {:?}", plan.argv))?;
-
-        let root_pid = child.id();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let state = Arc::new(ProcessState::new(child));
-
-        process_registry()
-            .lock()
-            .unwrap()
-            .insert(root_pid, Arc::clone(&state));
-        if let Some(stdout) = stdout {
-            let stream = if io_mode == IoMode::Pty {
-                OutputStream::PtyMerged
-            } else {
-                OutputStream::Stdout
-            };
-            spawn_reader_thread(state.clone(), stdout, stream);
-        }
-        if let Some(stderr) = stderr {
-            let stream = if io_mode == IoMode::Pty {
-                OutputStream::PtyMerged
-            } else {
-                OutputStream::Stderr
-            };
-            spawn_reader_thread(state, stderr, stream);
-        }
-
-        Ok(RunningHandle {
-            root_pid,
-            launch_time: launched_at,
-            io_mode,
-        })
+        let command = build_local_command(plan, io_mode)?;
+        spawn_with_bookkeeping(command, io_mode)
     }
 
     fn try_wait(
@@ -398,43 +363,7 @@ impl Backend for PlainFallbackBackend {
     }
 
     fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
-        let pid = handle.root_pid.to_string();
-        let output = Command::new("ps")
-            .args(["-o", "rss=", "-o", "%cpu=", "-p", &pid])
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to sample process metrics for pid {}",
-                    handle.root_pid
-                )
-            })?;
-        anyhow::ensure!(
-            output.status.success(),
-            "ps sampling failed for pid {}",
-            handle.root_pid
-        );
-
-        let metrics = String::from_utf8_lossy(&output.stdout);
-        let mut parts = metrics.split_whitespace();
-        let rss_kib = parts
-            .next()
-            .context("ps output did not include rss")?
-            .parse::<u64>()
-            .context("rss was not numeric")?;
-        let cpu_percent = parts
-            .next()
-            .unwrap_or("0")
-            .parse::<f32>()
-            .context("cpu percent was not numeric")?;
-        let memory_bytes = rss_kib.saturating_mul(1024);
-
-        Ok(Sample {
-            captured_at: SystemTime::now(),
-            cpu_percent,
-            memory_bytes,
-            peak_memory_bytes: Some(memory_bytes),
-            child_process_count: Some(1),
-        })
+        crate::core::sampling::sample_process_tree(handle.root_pid)
     }
 
     fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
@@ -939,4 +868,76 @@ fn runtime_since(started_at: SystemTime) -> Duration {
     SystemTime::now()
         .duration_since(started_at)
         .unwrap_or_default()
+}
+
+/// Build a `Command` from a flat argv (`argv[0]` is the program). Wires
+/// stdio for pipe vs PTY mode and puts the child in its own process group
+/// on unix. This is the only place that knows how to materialize a child
+/// process for ANY backend that already produced a complete argv.
+#[allow(dead_code)]
+pub(crate) fn command_from_argv(
+    argv: &[std::ffi::OsString],
+    io_mode: IoMode,
+) -> anyhow::Result<Command> {
+    anyhow::ensure!(!argv.is_empty(), "command argv must not be empty");
+
+    let mut command = Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    let _ = io_mode; // io_mode reserved for future PTY-specific stdio decisions
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    Ok(command)
+}
+
+/// Spawn a `Command` and wire it into the run loop's process registry +
+/// reader threads. All `Backend::launch` impls funnel through this so the
+/// run loop owns the spawn machinery in exactly one place.
+pub(crate) fn spawn_with_bookkeeping(
+    mut command: Command,
+    io_mode: IoMode,
+) -> anyhow::Result<RunningHandle> {
+    let program = command.get_program().to_os_string();
+    let launched_at = SystemTime::now();
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn command: {program:?}"))?;
+
+    let root_pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let state = Arc::new(ProcessState::new(child));
+
+    process_registry()
+        .lock()
+        .unwrap()
+        .insert(root_pid, Arc::clone(&state));
+
+    if let Some(stdout) = stdout {
+        let stream = if io_mode == IoMode::Pty {
+            OutputStream::PtyMerged
+        } else {
+            OutputStream::Stdout
+        };
+        spawn_reader_thread(state.clone(), stdout, stream);
+    }
+    if let Some(stderr) = stderr {
+        let stream = if io_mode == IoMode::Pty {
+            OutputStream::PtyMerged
+        } else {
+            OutputStream::Stderr
+        };
+        spawn_reader_thread(state, stderr, stream);
+    }
+
+    Ok(RunningHandle {
+        root_pid,
+        launch_time: launched_at,
+        io_mode,
+    })
 }
