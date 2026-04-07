@@ -246,4 +246,10 @@ pub struct RunOutcome {
     /// still has a meaningful percentage attached.
     pub system_memory_bytes: Option<u64>,
     pub samples: Vec<SummarySample>,
+    /// CPU cap requested via `--cpu`, in centi-cores. Used by the summary
+    /// to show the cpu peak as a percent of the user's own budget.
+    pub cpu_limit_centi_cores: Option<u32>,
+    /// Host logical core count. Used by the summary as a fallback
+    /// denominator when `--cpu` was not supplied.
+    pub host_logical_cores: Option<u32>,
 }

@@ -27,7 +27,14 @@ pub fn render(outcome: &RunOutcome) -> String {
         ));
     }
     if let Some(stats) = cpu_stats(&outcome.samples) {
-        body.push(build_row("cpu", &format_cpu_stats(stats)));
+        body.push(build_row(
+            "cpu",
+            &format_cpu_stats(
+                stats,
+                outcome.cpu_limit_centi_cores,
+                outcome.host_logical_cores,
+            ),
+        ));
     }
 
     // Inner width = max of (longest body row, header label + breathing
@@ -103,15 +110,30 @@ fn format_memory(peak: u64, limit: Option<u64>, system_total: Option<u64>) -> St
     head
 }
 
-/// `avg <Nc> (<P %>), max <Nc> (<P %>)` — cores first, then the raw
-/// `%cpu` value from `ps` in parentheses so power users can see both
-/// views at once.
-fn format_cpu_stats(stats: CpuStats) -> String {
+/// `avg <Nc>, max <Nc> (<P %> of <denom>)` — cores first, then a tight
+/// percent of either the user's `--cpu` budget (if set) or the host's
+/// logical core count (if probed). Falls back to the bare `avg/max` form
+/// when neither denominator is available, mirroring `format_memory`.
+fn format_cpu_stats(
+    stats: CpuStats,
+    cpu_limit_centi_cores: Option<u32>,
+    host_logical_cores: Option<u32>,
+) -> String {
     let avg_cores = format_cores(stats.avg);
     let max_cores = format_cores(stats.max);
-    let avg_pct = stats.avg;
-    let max_pct = stats.max;
-    format!("avg {avg_cores} ({avg_pct:.1}%), max {max_cores} ({max_pct:.1}%)")
+    let max_in_cores = (stats.max / 100.0).max(0.0);
+    let head = format!("avg {avg_cores}, max {max_cores}");
+
+    if let Some(limit_centi) = cpu_limit_centi_cores.filter(|&n| n > 0) {
+        let limit_cores = limit_centi as f32 / 100.0;
+        let percent = (max_in_cores / limit_cores) * 100.0;
+        return format!("{head} ({percent:.1}% of {limit_cores:.2}c)");
+    }
+    if let Some(host) = host_logical_cores.filter(|&n| n > 0) {
+        let percent = (max_in_cores / host as f32) * 100.0;
+        return format!("{head} ({percent:.1}% of {host}c)");
+    }
+    head
 }
 
 fn format_exit_status(status: ExitStatus) -> String {
@@ -273,6 +295,8 @@ impl RunOutcome {
                     memory_bytes: 4_194_304,
                 },
             ],
+            cpu_limit_centi_cores: None,
+            host_logical_cores: None,
         }
     }
 }
@@ -368,24 +392,80 @@ mod tests {
     }
 
     #[test]
-    fn format_cpu_stats_includes_cores_and_percent() {
+    fn format_cpu_stats_with_no_denominator_shows_avg_and_max_only() {
         assert_eq!(
-            format_cpu_stats(CpuStats { avg: 0.0, max: 0.0 }),
-            "avg 0.00c (0.0%), max 0.00c (0.0%)"
+            format_cpu_stats(CpuStats { avg: 0.0, max: 0.0 }, None, None),
+            "avg 0.00c, max 0.00c"
         );
         assert_eq!(
-            format_cpu_stats(CpuStats {
-                avg: 18.75,
-                max: 25.0,
-            }),
-            "avg 0.19c (18.8%), max 0.25c (25.0%)"
+            format_cpu_stats(
+                CpuStats {
+                    avg: 18.75,
+                    max: 25.0,
+                },
+                None,
+                None,
+            ),
+            "avg 0.19c, max 0.25c"
+        );
+    }
+
+    #[test]
+    fn format_cpu_stats_with_host_cores_appends_percent_of_host() {
+        // 25 % of one core = 0.25 cores. On an 8-core host that's 3.1 %.
+        assert_eq!(
+            format_cpu_stats(
+                CpuStats {
+                    avg: 18.75,
+                    max: 25.0,
+                },
+                None,
+                Some(8),
+            ),
+            "avg 0.19c, max 0.25c (3.1% of 8c)"
+        );
+    }
+
+    #[test]
+    fn format_cpu_stats_with_cpu_limit_uses_limit_as_denominator() {
+        // 0.45 cores against a 0.50c limit = 90 %. Host cores should be
+        // ignored when the user passed a limit.
+        assert_eq!(
+            format_cpu_stats(
+                CpuStats {
+                    avg: 30.0,
+                    max: 45.0,
+                },
+                Some(50), // 0.50c in centi-cores
+                Some(8),
+            ),
+            "avg 0.30c, max 0.45c (90.0% of 0.50c)"
+        );
+    }
+
+    #[test]
+    fn format_cpu_stats_treats_zero_denominators_as_unknown() {
+        assert_eq!(
+            format_cpu_stats(
+                CpuStats {
+                    avg: 5.0,
+                    max: 10.0
+                },
+                Some(0),
+                None
+            ),
+            "avg 0.05c, max 0.10c"
         );
         assert_eq!(
-            format_cpu_stats(CpuStats {
-                avg: 450.0,
-                max: 800.0,
-            }),
-            "avg 4.50c (450.0%), max 8.00c (800.0%)"
+            format_cpu_stats(
+                CpuStats {
+                    avg: 5.0,
+                    max: 10.0
+                },
+                None,
+                Some(0)
+            ),
+            "avg 0.05c, max 0.10c"
         );
     }
 
@@ -572,9 +652,12 @@ mod tests {
 
     #[test]
     fn render_card_grows_to_fit_the_longest_body_row() {
-        // Fixture cpu row is the widest at roughly 47 columns, which is
-        // longer than the MIN_INNER_WIDTH floor of 38.
-        let rendered = render(&RunOutcome::fixture_for_test());
+        // Set host_logical_cores so the cpu row gets a "% of Nc" suffix,
+        // making it the widest row at roughly 45 columns — longer than
+        // the MIN_INNER_WIDTH floor of 38.
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.host_logical_cores = Some(8);
+        let rendered = render(&outcome);
         let width = rendered.lines().next().unwrap().chars().count();
         assert!(
             width > MIN_INNER_WIDTH + 2,
@@ -611,7 +694,9 @@ mod tests {
         assert!(!rendered.contains("  memory   max 4.0 MiB ("));
         // fixture has cpu_percent samples 12.5 and 25.0
         // -> avg 18.75 % = 0.19c, max 25.0 % = 0.25c
-        assert!(rendered.contains("  cpu      avg 0.19c (18.8%), max 0.25c (25.0%)"));
+        // Fixture has no cpu_limit and no host_logical_cores, so cpu row
+        // shows just `avg <c>, max <c>` with no parenthesized denominator.
+        assert!(rendered.contains("  cpu      avg 0.19c, max 0.25c"));
         // Old labels should not leak in.
         assert!(!rendered.contains("samples"));
         assert!(!rendered.contains("bytes"));

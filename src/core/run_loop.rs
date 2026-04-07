@@ -271,6 +271,8 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
                 mem_limit_bytes: plan.resource_spec.mem.map(|limit| limit.bytes()),
                 system_memory_bytes: crate::core::system_memory::total_memory_bytes(),
                 samples,
+                cpu_limit_centi_cores: plan.resource_spec.cpu.map(|limit| limit.centi_cores()),
+                host_logical_cores: crate::core::system_cpu::host_logical_cores(),
             };
             // Summary goes to stderr so user pipelines like
             //   scaler run -- jq < x.json > out.json
