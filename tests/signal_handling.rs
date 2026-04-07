@@ -78,13 +78,13 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
     let mut stdout = child.stdout.take().unwrap();
     let (tx, rx) = mpsc::channel::<[u8; 5]>();
-    let reader = std::thread::spawn(move || {
+    let stdout_reader = std::thread::spawn(move || {
         let mut buffer = [0_u8; 5];
         stdout.read_exact(&mut buffer).unwrap();
         let _ = tx.send(buffer);
@@ -93,6 +93,13 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
         let mut full_output = buffer.to_vec();
         full_output.extend(rest);
         full_output
+    });
+
+    let mut stderr = child.stderr.take().unwrap();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stderr.read_to_end(&mut buffer);
+        buffer
     });
 
     let first_bytes = rx.recv_timeout(Duration::from_millis(490)).unwrap();
@@ -106,10 +113,16 @@ fn os_sigint_triggers_interrupt_flow_when_signal_bridge_is_active() {
     assert!(signal_status.success());
 
     let status = child.wait().unwrap();
-    let stdout = String::from_utf8(reader.join().unwrap()).unwrap();
+    let stdout = String::from_utf8(stdout_reader.join().unwrap()).unwrap();
+    let stderr = String::from_utf8(stderr_reader.join().unwrap()).unwrap();
     assert_eq!(resolved_code(status), Some(130));
-    assert!(stdout.contains("exit_status:"));
-    assert!(stdout.contains("runtime:"));
+    // Child output stayed on stdout.
+    assert!(stdout.contains("ready"));
+    // Summary card moved to stderr along with the box-drawing frame.
+    assert!(stderr.contains(" scaler summary "));
+    assert!(stderr.contains("exit "));
+    assert!(stderr.contains("elapsed "));
+    assert!(stderr.contains("└──"));
 }
 
 #[test]

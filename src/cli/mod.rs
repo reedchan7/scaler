@@ -48,7 +48,10 @@ pub fn parse_from(raw: Vec<OsString>) -> Result<Cli> {
     Ok(Cli::try_parse_from(normalized)?)
 }
 
-pub fn render_doctor_output(report: &crate::core::CapabilityReport) -> String {
+pub fn render_doctor_output(
+    report: &crate::core::CapabilityReport,
+    effective: crate::core::BackendKind,
+) -> String {
     let mut lines = vec![
         format!("platform: {}", report.platform.as_str()),
         format!("backend: {}", report.backend.as_str()),
@@ -56,6 +59,7 @@ pub fn render_doctor_output(report: &crate::core::CapabilityReport) -> String {
         format!("cpu: {}", report.cpu.as_str()),
         format!("memory: {}", report.memory.as_str()),
         format!("interactive: {}", report.interactive.as_str()),
+        format!("effective_backend: {}", effective.as_str()),
     ];
 
     lines.extend(

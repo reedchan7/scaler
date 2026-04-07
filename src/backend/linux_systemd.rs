@@ -8,9 +8,14 @@ use std::{
 
 use anyhow::Context;
 
+use crate::backend::Backend;
+use crate::core::run_loop::{
+    command_from_argv, preferred_io_mode, spawn_with_bookkeeping, terminate_process_group,
+    try_wait_via_registry,
+};
 use crate::core::{
     BackendKind, CapabilityLevel, DoctorPrerequisite, InteractiveMode, LaunchPlan, Platform,
-    PrerequisiteStatus, ShellKind,
+    PrerequisiteStatus, RunningHandle, Sample, ShellKind, Signal,
 };
 
 pub struct LinuxProbe {
@@ -30,6 +35,11 @@ pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>
         OsString::from("systemd-run"),
         OsString::from("--user"),
         OsString::from("--scope"),
+        // Suppress systemd-run's "Running as unit: run-XXX.scope" stderr
+        // line so scaler's stderr only contains scaler-owned output. The
+        // scope name is still queryable via `systemctl --user list-units`
+        // for anyone debugging.
+        OsString::from("--quiet"),
     ];
 
     if plan.resource_spec.interactive == InteractiveMode::Always {
@@ -183,6 +193,47 @@ fn probe_user_manager() -> bool {
         Ok(status) => status.success(),
         Err(_) => false,
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LinuxSystemdBackend;
+
+impl Backend for LinuxSystemdBackend {
+    fn detect(&self) -> crate::core::CapabilityReport {
+        detect_linux_capabilities(probe_linux_host())
+    }
+
+    fn launch(&self, plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
+        let io_mode = preferred_io_mode(plan.resource_spec.interactive);
+        let argv = build_systemd_run_argv(plan)?;
+        let command = command_from_argv(&argv, io_mode)?;
+        spawn_with_bookkeeping(command, io_mode)
+    }
+
+    fn try_wait(
+        &self,
+        handle: &mut RunningHandle,
+    ) -> anyhow::Result<Option<std::process::ExitStatus>> {
+        try_wait_via_registry(handle.root_pid)
+    }
+
+    fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
+        crate::core::sampling::sample_process_tree(handle.root_pid)
+    }
+
+    fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
+        terminate_process_group(handle.root_pid, signal)
+    }
+}
+
+/// Test seam: returns the argv that `LinuxSystemdBackend.launch` would
+/// hand to `command_from_argv`. Used by integration tests so they can
+/// assert on the wiring without spawning a real process.
+#[doc(hidden)]
+pub fn linux_systemd_command_preview_for_test(
+    plan: &LaunchPlan,
+) -> anyhow::Result<Vec<std::ffi::OsString>> {
+    build_systemd_run_argv(plan)
 }
 
 #[cfg(test)]

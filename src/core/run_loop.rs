@@ -266,11 +266,17 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
             ui.restore_once()?;
             let outcome = RunOutcome {
                 exit_status,
-                runtime: runtime_since(started_at),
+                elapsed: runtime_since(started_at),
                 peak_memory,
                 samples,
             };
-            println!("{}", crate::core::summary::render(&outcome));
+            // Summary goes to stderr so user pipelines like
+            //   scaler run -- jq < x.json > out.json
+            // keep `out.json` clean of scaler's metadata. The leading blank
+            // line gives a clear visual break from the child output; the
+            // top + bottom box-drawing rule lives inside summary::render.
+            eprintln!();
+            eprintln!("{}", crate::core::summary::render(&outcome));
             record_event("render_summary");
             clear_runtime_overrides();
 
@@ -349,129 +355,37 @@ impl Backend for PlainFallbackBackend {
 
     fn launch(&self, plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
         let io_mode = preferred_io_mode(plan.resource_spec.interactive);
-        let mut command = build_local_command(plan, io_mode)?;
-        let launched_at = SystemTime::now();
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to launch fallback command: {:?}", plan.argv))?;
-
-        let root_pid = child.id();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let state = Arc::new(ProcessState::new(child));
-
-        process_registry()
-            .lock()
-            .unwrap()
-            .insert(root_pid, Arc::clone(&state));
-        if let Some(stdout) = stdout {
-            let stream = if io_mode == IoMode::Pty {
-                OutputStream::PtyMerged
-            } else {
-                OutputStream::Stdout
-            };
-            spawn_reader_thread(state.clone(), stdout, stream);
-        }
-        if let Some(stderr) = stderr {
-            let stream = if io_mode == IoMode::Pty {
-                OutputStream::PtyMerged
-            } else {
-                OutputStream::Stderr
-            };
-            spawn_reader_thread(state, stderr, stream);
-        }
-
-        Ok(RunningHandle {
-            root_pid,
-            launch_time: launched_at,
-            io_mode,
-        })
+        let command = build_local_command(plan, io_mode)?;
+        spawn_with_bookkeeping(command, io_mode)
     }
 
     fn try_wait(
         &self,
         handle: &mut RunningHandle,
     ) -> anyhow::Result<Option<std::process::ExitStatus>> {
-        let state = process_state(handle.root_pid)
-            .with_context(|| format!("missing process state for pid {}", handle.root_pid))?;
-        Ok(state.child.lock().unwrap().try_wait()?)
+        try_wait_via_registry(handle.root_pid)
     }
 
     fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
-        let pid = handle.root_pid.to_string();
-        let output = Command::new("ps")
-            .args(["-o", "rss=", "-o", "%cpu=", "-p", &pid])
-            .output()
-            .with_context(|| {
-                format!(
-                    "failed to sample process metrics for pid {}",
-                    handle.root_pid
-                )
-            })?;
-        anyhow::ensure!(
-            output.status.success(),
-            "ps sampling failed for pid {}",
-            handle.root_pid
-        );
-
-        let metrics = String::from_utf8_lossy(&output.stdout);
-        let mut parts = metrics.split_whitespace();
-        let rss_kib = parts
-            .next()
-            .context("ps output did not include rss")?
-            .parse::<u64>()
-            .context("rss was not numeric")?;
-        let cpu_percent = parts
-            .next()
-            .unwrap_or("0")
-            .parse::<f32>()
-            .context("cpu percent was not numeric")?;
-        let memory_bytes = rss_kib.saturating_mul(1024);
-
-        Ok(Sample {
-            captured_at: SystemTime::now(),
-            cpu_percent,
-            memory_bytes,
-            peak_memory_bytes: Some(memory_bytes),
-            child_process_count: Some(1),
-        })
+        crate::core::sampling::sample_process_tree(handle.root_pid)
     }
 
     fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
-        let signal_flag = match signal {
-            Signal::Interrupt => "-INT",
-            Signal::Terminate => "-TERM",
-            Signal::Kill => "-KILL",
-        };
-        let process_group = format!("-{}", handle.root_pid);
-        let status = Command::new("kill")
-            .arg(signal_flag)
-            .arg("--")
-            .arg(&process_group)
-            .status()
-            .with_context(|| {
-                format!(
-                    "failed to send {signal_flag} to process group {}",
-                    handle.root_pid
-                )
-            })?;
-        anyhow::ensure!(
-            status.success(),
-            "kill command exited unsuccessfully for process group {}",
-            handle.root_pid
-        );
-        Ok(())
+        terminate_process_group(handle.root_pid, signal)
     }
 }
 
+#[doc(hidden)]
 pub fn record_summary_timeline_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["launch", "restore_terminal", "render_summary"])
 }
 
+#[doc(hidden)]
 pub fn record_monitor_fallback_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_unavailable", "plain_renderer_active"])
 }
 
+#[doc(hidden)]
 pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
     recorded_events_matching(&[
         "interactive_mode_selected",
@@ -480,10 +394,12 @@ pub fn record_interactive_mode_for_test() -> Vec<&'static str> {
     ])
 }
 
+#[doc(hidden)]
 pub fn record_post_launch_monitor_failure_for_test() -> Vec<&'static str> {
     recorded_events_matching(&["monitor_failed", "plain_renderer_continues"])
 }
 
+#[doc(hidden)]
 pub fn record_ui_mode_for_test() -> Vec<&'static str> {
     recorded_events_matching(&[
         "tui_renderer_active",
@@ -492,24 +408,29 @@ pub fn record_ui_mode_for_test() -> Vec<&'static str> {
     ])
 }
 
+#[doc(hidden)]
 pub fn take_output_frames_for_test() -> Vec<OutputFrame> {
     let mut trace = execution_trace().lock().unwrap();
     std::mem::take(&mut trace.frames)
 }
 
+#[doc(hidden)]
 pub fn reset_test_state() {
     clear_execution_trace();
     clear_runtime_overrides();
 }
 
+#[doc(hidden)]
 pub fn request_interrupt_for_test() {
     INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+#[doc(hidden)]
 pub fn set_test_poll_interval_for_next_run(duration: Duration) {
     runtime_overrides().lock().unwrap().poll_interval = Some(duration);
 }
 
+#[doc(hidden)]
 pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_after: Duration) {
     runtime_overrides().lock().unwrap().interrupt_plan = Some(InterruptPlan {
         sigterm_after,
@@ -517,6 +438,7 @@ pub fn set_test_interrupt_plan_for_next_run(sigterm_after: Duration, sigkill_aft
     });
 }
 
+#[doc(hidden)]
 pub fn set_test_terminal_state_for_next_run(stdin: bool, stdout: bool, stderr: bool) {
     runtime_overrides().lock().unwrap().terminal_state = Some(TerminalState {
         stdin,
@@ -525,14 +447,17 @@ pub fn set_test_terminal_state_for_next_run(stdin: bool, stdout: bool, stderr: b
     });
 }
 
+#[doc(hidden)]
 pub fn set_test_monitor_start_failure_for_next_run(message: &str) {
     runtime_overrides().lock().unwrap().monitor_start_failure = Some(message.to_string());
 }
 
+#[doc(hidden)]
 pub fn set_test_monitor_fail_after_launch_for_next_run(draws_before_failure: usize) {
     runtime_overrides().lock().unwrap().monitor_fail_after_draws = Some(draws_before_failure);
 }
 
+#[doc(hidden)]
 pub fn plain_fallback_command_preview_for_test(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
     let io_mode = preferred_io_mode(plan.resource_spec.interactive);
     let command = build_local_command(plan, io_mode)?;
@@ -579,7 +504,7 @@ struct RuntimeOverrides {
 static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_BRIDGE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
-fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
+pub(crate) fn preferred_io_mode(interactive_mode: InteractiveMode) -> IoMode {
     match interactive_mode {
         InteractiveMode::Always => IoMode::Pty,
         InteractiveMode::Auto | InteractiveMode::Never => IoMode::Pipes,
@@ -939,4 +864,105 @@ fn runtime_since(started_at: SystemTime) -> Duration {
     SystemTime::now()
         .duration_since(started_at)
         .unwrap_or_default()
+}
+
+/// Polls the registered process for the given pid and returns its exit
+/// status if available. Used by all platform backend `try_wait` impls.
+pub fn try_wait_via_registry(root_pid: u32) -> anyhow::Result<Option<std::process::ExitStatus>> {
+    let state = process_state(root_pid)
+        .with_context(|| format!("missing process state for pid {root_pid}"))?;
+    Ok(state.child.lock().unwrap().try_wait()?)
+}
+
+/// Sends `signal` to the process group rooted at `root_pid`. Used by all
+/// platform backend `terminate` impls.
+pub fn terminate_process_group(root_pid: u32, signal: Signal) -> anyhow::Result<()> {
+    let signal_flag = match signal {
+        Signal::Interrupt => "-INT",
+        Signal::Terminate => "-TERM",
+        Signal::Kill => "-KILL",
+    };
+    let process_group = format!("-{root_pid}");
+    let status = Command::new("kill")
+        .arg(signal_flag)
+        .arg("--")
+        .arg(&process_group)
+        .status()
+        .with_context(|| format!("failed to send {signal_flag} to process group {root_pid}"))?;
+    anyhow::ensure!(
+        status.success(),
+        "kill command exited unsuccessfully for process group {root_pid}"
+    );
+    Ok(())
+}
+
+/// Build a `Command` from a flat argv (`argv[0]` is the program). Wires
+/// stdio for pipe vs PTY mode and puts the child in its own process group
+/// on unix. This is the only place that knows how to materialize a child
+/// process for ANY backend that already produced a complete argv.
+pub(crate) fn command_from_argv(
+    argv: &[std::ffi::OsString],
+    io_mode: IoMode,
+) -> anyhow::Result<Command> {
+    anyhow::ensure!(!argv.is_empty(), "command argv must not be empty");
+
+    let mut command = Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    let _ = io_mode; // io_mode reserved for future PTY-specific stdio decisions
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    Ok(command)
+}
+
+/// Spawn a `Command` and wire it into the run loop's process registry +
+/// reader threads. All `Backend::launch` impls funnel through this so the
+/// run loop owns the spawn machinery in exactly one place.
+pub(crate) fn spawn_with_bookkeeping(
+    mut command: Command,
+    io_mode: IoMode,
+) -> anyhow::Result<RunningHandle> {
+    let program = command.get_program().to_os_string();
+    let launched_at = SystemTime::now();
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn command: {program:?}"))?;
+
+    let root_pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let state = Arc::new(ProcessState::new(child));
+
+    process_registry()
+        .lock()
+        .unwrap()
+        .insert(root_pid, Arc::clone(&state));
+
+    if let Some(stdout) = stdout {
+        let stream = if io_mode == IoMode::Pty {
+            OutputStream::PtyMerged
+        } else {
+            OutputStream::Stdout
+        };
+        spawn_reader_thread(state.clone(), stdout, stream);
+    }
+    if let Some(stderr) = stderr {
+        let stream = if io_mode == IoMode::Pty {
+            OutputStream::PtyMerged
+        } else {
+            OutputStream::Stderr
+        };
+        spawn_reader_thread(state, stderr, stream);
+    }
+
+    Ok(RunningHandle {
+        root_pid,
+        launch_time: launched_at,
+        io_mode,
+    })
 }

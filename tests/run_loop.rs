@@ -62,9 +62,10 @@ fn summary_renderer_includes_status_and_peak_memory() {
     let _guard = test_guard();
     let rendered = summary::render(&RunOutcome::fixture_for_test());
 
-    assert!(rendered.contains("exit_status"));
-    assert!(rendered.contains("peak_memory"));
-    assert!(rendered.contains("runtime"));
+    assert!(rendered.contains("exit     0"));
+    assert!(rendered.contains("elapsed  3.000s"));
+    assert!(rendered.contains("memory   max 4.0 MiB"));
+    assert!(rendered.contains("cpu      avg 0.19c, max 0.25c"));
 }
 
 #[test]
@@ -126,7 +127,15 @@ fn binary_run_executes_command_and_renders_summary() {
     command
         .assert()
         .success()
-        .stdout(predicate::str::contains("hi").and(predicate::str::contains("exit_status:")));
+        // Child output stays on stdout so user pipelines can grep/jq it.
+        .stdout(predicate::str::contains("hi"))
+        // Summary card (header + body + footer) goes to stderr so it
+        // never contaminates a piped stdout.
+        .stderr(
+            predicate::str::contains(" scaler summary ")
+                .and(predicate::str::contains("  exit     0"))
+                .and(predicate::str::contains("└──")),
+        );
 }
 
 #[test]
@@ -138,7 +147,7 @@ fn binary_run_propagates_child_exit_code() {
     command
         .assert()
         .code(7)
-        .stdout(predicate::str::contains("exit_status:").and(predicate::str::contains("7")));
+        .stderr(predicate::str::contains("exit     7"));
 }
 
 #[test]

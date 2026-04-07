@@ -24,15 +24,16 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
+        assert!(lines[6].starts_with("effective_backend: "));
         assert_line_prefixes(
-            &lines[6..9],
+            &lines[7..10],
             &[
                 "prerequisite: systemd_run=",
                 "prerequisite: cgroup_v2=",
                 "prerequisite: user_manager=",
             ],
         );
-        assert_sorted_warning_lines(&lines[9..]);
+        assert_sorted_warning_lines(&lines[10..]);
     } else if cfg!(target_os = "macos") {
         assert_core_lines(
             &lines,
@@ -45,14 +46,15 @@ fn doctor_prints_capability_states() {
                 "interactive: ",
             ],
         );
+        assert!(lines[6].starts_with("effective_backend: "));
         assert_line_prefixes(
-            &lines[6..8],
+            &lines[7..9],
             &[
                 "prerequisite: taskpolicy=",
                 "prerequisite: platform_version=",
             ],
         );
-        assert_sorted_warning_lines(&lines[8..]);
+        assert_sorted_warning_lines(&lines[9..]);
     } else {
         let expected = concat!(
             "platform: unsupported\n",
@@ -61,6 +63,7 @@ fn doctor_prints_capability_states() {
             "cpu: unavailable\n",
             "memory: unavailable\n",
             "interactive: unavailable\n",
+            "effective_backend: plain_fallback\n",
             "prerequisite: no supported backend for this host\n",
         );
 
@@ -116,7 +119,7 @@ fn doctor_renderer_uses_structured_prerequisites_in_declared_order() {
         warnings: vec!["z warning".to_string(), "a warning".to_string()],
     };
 
-    let stdout = render_doctor_output(&report);
+    let stdout = render_doctor_output(&report, BackendKind::PlainFallback);
     let expected = concat!(
         "platform: linux\n",
         "backend: linux_systemd\n",
@@ -124,6 +127,7 @@ fn doctor_renderer_uses_structured_prerequisites_in_declared_order() {
         "cpu: unavailable\n",
         "memory: unavailable\n",
         "interactive: unavailable\n",
+        "effective_backend: plain_fallback\n",
         "prerequisite: systemd_run=missing\n",
         "prerequisite: cgroup_v2=missing\n",
         "prerequisite: user_manager=skipped\n",
@@ -165,7 +169,11 @@ fn doctor_smoke_output_includes_platform_backend_state_and_prerequisite() {
     let stdout = doctor_stdout();
 
     assert!(stdout.lines().any(|line| line.starts_with("platform: ")));
-    assert!(stdout.lines().any(|line| line.starts_with("backend_state: ")));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("backend_state: "))
+    );
     assert!(
         stdout
             .lines()
@@ -181,4 +189,29 @@ fn assert_line_prefixes(lines: &[&str], expected_prefixes: &[&str]) {
             "{line} did not start with {prefix}"
         );
     }
+}
+
+#[test]
+fn doctor_renderer_emits_effective_backend_line() {
+    let report = CapabilityReport {
+        platform: Platform::Linux,
+        backend: BackendKind::LinuxSystemd,
+        backend_state: CapabilityLevel::Enforced,
+        cpu: CapabilityLevel::Enforced,
+        memory: CapabilityLevel::Enforced,
+        interactive: CapabilityLevel::Enforced,
+        prerequisites: vec![
+            DoctorPrerequisite::check("systemd_run", PrerequisiteStatus::Ok),
+            DoctorPrerequisite::check("cgroup_v2", PrerequisiteStatus::Ok),
+            DoctorPrerequisite::check("user_manager", PrerequisiteStatus::Ok),
+        ],
+        warnings: vec![],
+    };
+
+    let stdout = render_doctor_output(&report, BackendKind::LinuxSystemd);
+
+    assert!(
+        stdout.contains("effective_backend: linux_systemd"),
+        "expected effective_backend line, got: {stdout}"
+    );
 }

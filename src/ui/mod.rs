@@ -2,6 +2,9 @@ use std::time::Duration;
 
 use crate::core::{CapabilityReport, OutputFrame};
 
+pub use crate::core::summary::format_bytes;
+pub use crate::core::summary::format_duration as format_elapsed;
+
 pub mod plain;
 pub mod tui;
 
@@ -34,25 +37,4 @@ pub trait Renderer {
         }
         Ok(())
     }
-}
-
-pub fn format_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-
-    let value = bytes as f64;
-    if value >= GIB {
-        format!("{:.1} GiB", value / GIB)
-    } else if value >= MIB {
-        format!("{:.1} MiB", value / MIB)
-    } else if value >= KIB {
-        format!("{:.1} KiB", value / KIB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-pub fn format_elapsed(duration: Duration) -> String {
-    format!("{:.3}s", duration.as_secs_f64())
 }

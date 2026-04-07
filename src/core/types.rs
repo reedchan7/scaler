@@ -51,6 +51,7 @@ impl Platform {
 pub enum BackendKind {
     LinuxSystemd,
     MacosTaskpolicy,
+    PlainFallback,
     Unsupported,
 }
 
@@ -59,6 +60,7 @@ impl BackendKind {
         match self {
             Self::LinuxSystemd => "linux_systemd",
             Self::MacosTaskpolicy => "macos_taskpolicy",
+            Self::PlainFallback => "plain_fallback",
             Self::Unsupported => "unsupported",
         }
     }
@@ -234,7 +236,7 @@ pub struct OutputFrame {
 #[derive(Debug)]
 pub struct RunOutcome {
     pub exit_status: ExitStatus,
-    pub runtime: Duration,
+    pub elapsed: Duration,
     pub peak_memory: Option<u64>,
     pub samples: Vec<SummarySample>,
 }

@@ -26,14 +26,17 @@ pub fn run() -> anyhow::Result<()> {
     match cli.command {
         crate::cli::args::Command::Doctor => {
             let report = crate::backend::detect_host_capabilities();
-            println!("{}", crate::cli::render_doctor_output(&report));
+            let effective = crate::backend::effective_backend_kind();
+            println!("{}", crate::cli::render_doctor_output(&report, effective));
             Ok(())
         }
         crate::cli::args::Command::Run(run) => {
             let plan = build_launch_plan(run);
-            let backend = crate::core::run_loop::PlainFallbackBackend;
+            let effective = crate::backend::effective_backend_kind();
+            warn_if_resource_limits_will_be_dropped(&plan, effective);
+            let backend = crate::backend::select_backend();
             let _signal_bridge = crate::core::run_loop::install_signal_bridge()?;
-            let outcome = crate::core::run_loop::execute(plan, &backend)?;
+            let outcome = crate::core::run_loop::execute(plan, backend.as_ref())?;
             if let Some(exit_code) = resolved_exit_code(&outcome.exit_status)
                 && exit_code != 0
             {
@@ -86,6 +89,21 @@ fn current_platform() -> crate::core::Platform {
         "linux" => crate::core::Platform::Linux,
         "macos" => crate::core::Platform::Macos,
         _ => crate::core::Platform::Unsupported,
+    }
+}
+
+fn warn_if_resource_limits_will_be_dropped(
+    plan: &crate::core::LaunchPlan,
+    effective: crate::core::BackendKind,
+) {
+    let asked_for_limits = plan.resource_spec.cpu.is_some() || plan.resource_spec.mem.is_some();
+    if !asked_for_limits {
+        return;
+    }
+    if effective == crate::core::BackendKind::PlainFallback {
+        eprintln!(
+            "scaler: resource limits NOT being enforced on this host; run `scaler doctor` for details"
+        );
     }
 }
 

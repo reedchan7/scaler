@@ -46,8 +46,10 @@ mod linux_tests {
             argv.iter()
                 .any(|value| value == "--property=MemorySwapMax=0")
         );
+        assert!(argv.iter().any(|value| value == "--quiet"));
         let delimiter_index = argv.iter().position(|value| value == "--").unwrap();
-        assert_eq!(delimiter_index, 7);
+        // systemd-run / --user / --scope / --quiet / 4 properties / --
+        assert_eq!(delimiter_index, 8);
         assert_eq!(&argv[delimiter_index + 1..], ["echo", "ok"]);
     }
 
@@ -71,6 +73,7 @@ mod linux_tests {
                 "systemd-run".to_string(),
                 "--user".to_string(),
                 "--scope".to_string(),
+                "--quiet".to_string(),
                 "--".to_string(),
                 "-tool".to_string(),
                 "arg".to_string(),
@@ -101,6 +104,7 @@ mod linux_tests {
                 "systemd-run".to_string(),
                 "--user".to_string(),
                 "--scope".to_string(),
+                "--quiet".to_string(),
                 "--".to_string(),
                 "sh".to_string(),
                 "-lc".to_string(),
@@ -139,9 +143,21 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Missing);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Skipped);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Missing,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[2],
+            "user_manager",
+            PrerequisiteStatus::Skipped,
+        );
         assert!(
             report
                 .warnings
@@ -183,9 +199,21 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Missing);
-        assert_prerequisite(&report.prerequisites[2], "user_manager", PrerequisiteStatus::Ok);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Missing,
+        );
+        assert_prerequisite(
+            &report.prerequisites[2],
+            "user_manager",
+            PrerequisiteStatus::Ok,
+        );
         assert!(
             report
                 .warnings
@@ -206,8 +234,16 @@ mod linux_tests {
         assert_eq!(report.cpu, CapabilityLevel::Unavailable);
         assert_eq!(report.memory, CapabilityLevel::Unavailable);
         assert_eq!(report.interactive, CapabilityLevel::Unavailable);
-        assert_prerequisite(&report.prerequisites[0], "systemd_run", PrerequisiteStatus::Ok);
-        assert_prerequisite(&report.prerequisites[1], "cgroup_v2", PrerequisiteStatus::Ok);
+        assert_prerequisite(
+            &report.prerequisites[0],
+            "systemd_run",
+            PrerequisiteStatus::Ok,
+        );
+        assert_prerequisite(
+            &report.prerequisites[1],
+            "cgroup_v2",
+            PrerequisiteStatus::Ok,
+        );
         assert_prerequisite(
             &report.prerequisites[2],
             "user_manager",
@@ -219,6 +255,49 @@ mod linux_tests {
                 .iter()
                 .any(|warning| warning.contains("user manager"))
         );
+    }
+
+    #[test]
+    fn linux_backend_command_preview_includes_systemd_run_and_resource_properties() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("/bin/echo"), OsString::from("hi")],
+            resource_spec: ResourceSpec {
+                cpu: Some(CpuLimit::from_centi_cores(50)),
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: false,
+            },
+            platform: Platform::Linux,
+        };
+
+        let preview =
+            scaler::backend::linux_systemd::linux_systemd_command_preview_for_test(&plan).unwrap();
+        let preview = preview
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(preview[0], "systemd-run");
+        assert!(preview.iter().any(|value| value == "--user"));
+        assert!(preview.iter().any(|value| value == "--scope"));
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=CPUQuota=50%")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=MemoryMax=67108864")
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|value| value == "--property=MemorySwapMax=0")
+        );
+        let dash_dash = preview.iter().position(|value| value == "--").unwrap();
+        assert_eq!(&preview[dash_dash + 1..], &["/bin/echo", "hi"]);
     }
 
     fn assert_prerequisite(
@@ -235,5 +314,62 @@ mod linux_tests {
                 panic!("expected structured prerequisite, got note: {message}");
             }
         }
+    }
+
+    #[test]
+    fn linux_backend_invokes_systemd_run_with_resource_properties_via_shim() {
+        use std::{env, fs, os::unix::fs::PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let shim_dir = temp.path().join("bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        let log_path = temp.path().join("argv.log");
+
+        let shim_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nwhile [ \"$#\" -gt 0 ]; do\n    arg=\"$1\"; shift\n    [ \"$arg\" = \"--\" ] && break\ndone\nexec \"$@\"\n",
+            log = log_path.display()
+        );
+        let shim_path = shim_dir.join("systemd-run");
+        fs::write(&shim_path, shim_body).unwrap();
+        let mut perms = fs::metadata(&shim_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&shim_path, perms).unwrap();
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", shim_dir.display(), original_path);
+
+        let assert = assert_cmd::Command::cargo_bin("scaler")
+            .unwrap()
+            .env("PATH", &new_path)
+            .env("SCALER_FORCE_BACKEND", "linux_systemd")
+            .args([
+                "run",
+                "--cpu",
+                "0.5c",
+                "--mem",
+                "64m",
+                "--",
+                "/bin/echo",
+                "ok",
+            ])
+            .assert();
+
+        assert.success();
+
+        let recorded = fs::read_to_string(&log_path).unwrap();
+        assert!(recorded.contains("--user"), "argv: {recorded}");
+        assert!(recorded.contains("--scope"), "argv: {recorded}");
+        assert!(
+            recorded.contains("--property=CPUQuota=50%"),
+            "argv: {recorded}"
+        );
+        assert!(
+            recorded.contains("--property=MemoryMax=67108864"),
+            "argv: {recorded}"
+        );
+        assert!(
+            recorded.contains("--property=MemorySwapMax=0"),
+            "argv: {recorded}"
+        );
     }
 }

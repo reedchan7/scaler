@@ -282,7 +282,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, true).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -306,7 +306,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, true).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -329,7 +329,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let error = build_taskpolicy_argv(&plan).unwrap_err().to_string();
+        let error = build_taskpolicy_argv(&plan, true).unwrap_err().to_string();
 
         assert!(error.contains("exactly one script token"));
     }
@@ -342,7 +342,7 @@ mod macos_tests {
             platform: Platform::Macos,
         };
 
-        let argv = build_taskpolicy_argv(&plan).unwrap();
+        let argv = build_taskpolicy_argv(&plan, false).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -380,7 +380,7 @@ mod macos_tests {
                 platform: Platform::Macos,
             };
 
-            let argv = build_taskpolicy_argv(&plan).unwrap();
+            let argv = build_taskpolicy_argv(&plan, true).unwrap();
             let argv = argv
                 .iter()
                 .map(|value| value.to_string_lossy().into_owned())
@@ -415,5 +415,96 @@ mod macos_tests {
         assert_eq!(report.memory, CapabilityLevel::BestEffort);
         assert_eq!(report.interactive, CapabilityLevel::BestEffort);
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn macos_command_omits_memory_flag_when_unsupported() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("echo"), OsString::from("ok")],
+            resource_spec: ResourceSpec {
+                cpu: None,
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: true,
+            },
+            platform: Platform::Macos,
+        };
+
+        let argv = build_taskpolicy_argv(&plan, false).unwrap();
+        let argv = argv
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(!argv.iter().any(|value| value == "-m"));
+        assert_eq!(&argv[argv.len() - 2..], ["echo", "ok"]);
+    }
+
+    #[test]
+    fn macos_backend_command_preview_uses_taskpolicy() {
+        let plan = LaunchPlan {
+            argv: vec![OsString::from("/bin/echo"), OsString::from("hi")],
+            resource_spec: ResourceSpec {
+                cpu: Some(CpuLimit::from_centi_cores(100)),
+                mem: Some(MemoryLimit::from_bytes(67_108_864)),
+                interactive: InteractiveMode::Never,
+                shell: None,
+                monitor: false,
+            },
+            platform: Platform::Macos,
+        };
+
+        let preview = scaler::backend::macos_taskpolicy::macos_taskpolicy_command_preview_for_test(
+            &plan, true,
+        )
+        .unwrap();
+        let preview = preview
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(preview[0], "taskpolicy");
+        assert!(preview.iter().any(|value| value == "-d"));
+        assert!(preview.iter().any(|value| value == "-g"));
+        assert!(preview.iter().any(|value| value == "-m"));
+        assert_eq!(&preview[preview.len() - 2..], ["/bin/echo", "hi"]);
+    }
+
+    #[test]
+    fn macos_backend_invokes_taskpolicy_with_throttle_class_via_shim() {
+        use std::{env, fs, os::unix::fs::PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let shim_dir = temp.path().join("bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        let log_path = temp.path().join("argv.log");
+
+        let shim_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nwhile [ \"$#\" -gt 0 ]; do\n    arg=\"$1\"; shift\n    [ \"$arg\" = \"--\" ] && break\ndone\nexec \"$@\"\n",
+            log = log_path.display()
+        );
+        let shim_path = shim_dir.join("taskpolicy");
+        fs::write(&shim_path, shim_body).unwrap();
+        let mut perms = fs::metadata(&shim_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&shim_path, perms).unwrap();
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", shim_dir.display(), original_path);
+
+        let assert = assert_cmd::Command::cargo_bin("scaler")
+            .unwrap()
+            .env("PATH", &new_path)
+            .env("SCALER_FORCE_BACKEND", "macos_taskpolicy")
+            .args(["run", "--cpu", "0.5c", "--", "/bin/echo", "ok"])
+            .assert();
+
+        assert.success();
+
+        let recorded = fs::read_to_string(&log_path).unwrap();
+        assert!(recorded.contains("-b"), "argv: {recorded}");
+        assert!(recorded.contains("throttle"), "argv: {recorded}");
+        assert!(recorded.contains("default"), "argv: {recorded}");
     }
 }

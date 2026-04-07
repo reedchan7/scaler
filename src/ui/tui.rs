@@ -16,7 +16,7 @@ use ratatui::{
 };
 
 use crate::{
-    core::OutputFrame,
+    core::{OutputFrame, OutputStream},
     ui::{MonitorSnapshot, Renderer, UiContext, format_bytes, format_elapsed},
 };
 
@@ -40,11 +40,21 @@ enum TerminalHandle {
     Test(Terminal<TestBackend>),
 }
 
+/// Cap on the per-stream replay buffer. Long outputs see only the tail of
+/// each stream — same trade-off as `trim_output` for the display buffer.
+const REPLAY_BUFFER_CAP: usize = 64 * 1024;
+
 #[derive(Debug)]
 struct TuiState {
     context: UiContext,
     snapshot: MonitorSnapshot,
+    /// Mixed display buffer used to render the dashboard "Output" pane.
     output: String,
+    /// Bytes destined for real stdout once the alt-screen tears down.
+    /// Per-stream so child stdout and child stderr stay separated.
+    stdout_replay: Vec<u8>,
+    /// Bytes destined for real stderr once the alt-screen tears down.
+    stderr_replay: Vec<u8>,
 }
 
 impl TuiRenderer {
@@ -57,6 +67,8 @@ impl TuiRenderer {
             context,
             snapshot: MonitorSnapshot::default(),
             output: String::new(),
+            stdout_replay: Vec::new(),
+            stderr_replay: Vec::new(),
         };
         let mut renderer = Self {
             terminal: if options.headless {
@@ -85,10 +97,22 @@ impl TuiRenderer {
 
 impl Renderer for TuiRenderer {
     fn render_frame(&mut self, frame: &OutputFrame) -> anyhow::Result<()> {
+        // Append to the mixed display buffer (used for the dashboard pane).
         self.state
             .output
             .push_str(String::from_utf8_lossy(&frame.bytes).as_ref());
         trim_output(&mut self.state.output);
+
+        // Append to the per-stream replay buffer so we can hand the bytes
+        // back to real stdout/stderr in finish() with the original stream
+        // identity preserved.
+        let target = match frame.stream {
+            OutputStream::Stdout | OutputStream::PtyMerged => &mut self.state.stdout_replay,
+            OutputStream::Stderr => &mut self.state.stderr_replay,
+        };
+        target.extend_from_slice(&frame.bytes);
+        trim_replay(target);
+
         self.draw()
     }
 
@@ -98,7 +122,36 @@ impl Renderer for TuiRenderer {
     }
 
     fn finish(&mut self) -> anyhow::Result<()> {
-        self.terminal.restore()
+        self.terminal.restore()?;
+        // After leaving the alt-screen, replay the captured child output to
+        // real stdout/stderr — preserving the original stream identity so
+        // pipelines like `scaler run -- jq < x.json > out.json` keep
+        // `out.json` clean of any stderr noise. Each replay buffer is
+        // trimmed to a 64 KiB tail, so very long outputs see only the tail.
+        // For full streaming use the plain renderer (which writes frames
+        // live as they arrive).
+        replay_to(std::io::stdout().lock(), &self.state.stdout_replay)?;
+        replay_to(std::io::stderr().lock(), &self.state.stderr_replay)?;
+        Ok(())
+    }
+}
+
+fn replay_to<W: Write>(mut writer: W, buffer: &[u8]) -> anyhow::Result<()> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    writer.write_all(buffer)?;
+    if !buffer.ends_with(b"\n") {
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn trim_replay(buffer: &mut Vec<u8>) {
+    if buffer.len() > REPLAY_BUFFER_CAP {
+        let drain_to = buffer.len() - REPLAY_BUFFER_CAP;
+        buffer.drain(..drain_to);
     }
 }
 
