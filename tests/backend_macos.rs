@@ -470,4 +470,41 @@ mod macos_tests {
         assert!(preview.iter().any(|value| value == "-m"));
         assert_eq!(&preview[preview.len() - 2..], ["/bin/echo", "hi"]);
     }
+
+    #[test]
+    fn macos_backend_invokes_taskpolicy_with_throttle_class_via_shim() {
+        use std::{env, fs, os::unix::fs::PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let shim_dir = temp.path().join("bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        let log_path = temp.path().join("argv.log");
+
+        let shim_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nwhile [ \"$#\" -gt 0 ]; do\n    arg=\"$1\"; shift\n    [ \"$arg\" = \"--\" ] && break\ndone\nexec \"$@\"\n",
+            log = log_path.display()
+        );
+        let shim_path = shim_dir.join("taskpolicy");
+        fs::write(&shim_path, shim_body).unwrap();
+        let mut perms = fs::metadata(&shim_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&shim_path, perms).unwrap();
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", shim_dir.display(), original_path);
+
+        let assert = assert_cmd::Command::cargo_bin("scaler")
+            .unwrap()
+            .env("PATH", &new_path)
+            .env("SCALER_FORCE_BACKEND", "macos_taskpolicy")
+            .args(["run", "--cpu", "0.5c", "--", "/bin/echo", "ok"])
+            .assert();
+
+        assert.success();
+
+        let recorded = fs::read_to_string(&log_path).unwrap();
+        assert!(recorded.contains("-b"), "argv: {recorded}");
+        assert!(recorded.contains("throttle"), "argv: {recorded}");
+        assert!(recorded.contains("default"), "argv: {recorded}");
+    }
 }

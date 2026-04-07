@@ -311,4 +311,61 @@ mod linux_tests {
             }
         }
     }
+
+    #[test]
+    fn linux_backend_invokes_systemd_run_with_resource_properties_via_shim() {
+        use std::{env, fs, os::unix::fs::PermissionsExt};
+
+        let temp = tempfile::tempdir().unwrap();
+        let shim_dir = temp.path().join("bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        let log_path = temp.path().join("argv.log");
+
+        let shim_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nwhile [ \"$#\" -gt 0 ]; do\n    arg=\"$1\"; shift\n    [ \"$arg\" = \"--\" ] && break\ndone\nexec \"$@\"\n",
+            log = log_path.display()
+        );
+        let shim_path = shim_dir.join("systemd-run");
+        fs::write(&shim_path, shim_body).unwrap();
+        let mut perms = fs::metadata(&shim_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&shim_path, perms).unwrap();
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", shim_dir.display(), original_path);
+
+        let assert = assert_cmd::Command::cargo_bin("scaler")
+            .unwrap()
+            .env("PATH", &new_path)
+            .env("SCALER_FORCE_BACKEND", "linux_systemd")
+            .args([
+                "run",
+                "--cpu",
+                "0.5c",
+                "--mem",
+                "64m",
+                "--",
+                "/bin/echo",
+                "ok",
+            ])
+            .assert();
+
+        assert.success();
+
+        let recorded = fs::read_to_string(&log_path).unwrap();
+        assert!(recorded.contains("--user"), "argv: {recorded}");
+        assert!(recorded.contains("--scope"), "argv: {recorded}");
+        assert!(
+            recorded.contains("--property=CPUQuota=50%"),
+            "argv: {recorded}"
+        );
+        assert!(
+            recorded.contains("--property=MemoryMax=67108864"),
+            "argv: {recorded}"
+        );
+        assert!(
+            recorded.contains("--property=MemorySwapMax=0"),
+            "argv: {recorded}"
+        );
+    }
 }
