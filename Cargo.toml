@@ -1,6 +1,6 @@
 [package]
 name = "scaler"
-version = "0.5.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 description = "Wrap a command with CPU and memory limits — real cgroup v2 on Linux, best-effort on macOS."
