@@ -1,21 +1,23 @@
 use std::{
+    collections::HashMap,
     env,
     ffi::OsString,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
 
 use crate::backend::Backend;
 use crate::core::run_loop::{
-    command_from_argv, preferred_io_mode, spawn_with_bookkeeping, terminate_process_group,
-    try_wait_via_registry,
+    command_from_argv, preferred_io_mode, spawn_with_bookkeeping, try_wait_via_registry,
 };
 use crate::core::{
-    BackendKind, CapabilityLevel, DoctorPrerequisite, InteractiveMode, LaunchPlan, Platform,
-    PrerequisiteStatus, RunningHandle, Sample, ShellKind, Signal,
+    BackendKind, CapabilityLevel, DoctorPrerequisite, LaunchPlan, Platform, PrerequisiteStatus,
+    RunningHandle, Sample, ShellKind, Signal,
 };
 
 pub struct LinuxProbe {
@@ -24,27 +26,38 @@ pub struct LinuxProbe {
     pub user_manager_reachable: bool,
 }
 
-pub fn build_systemd_run_argv(plan: &LaunchPlan) -> anyhow::Result<Vec<OsString>> {
+pub fn build_systemd_run_argv(plan: &LaunchPlan, unit_name: &str) -> anyhow::Result<Vec<OsString>> {
     anyhow::ensure!(
         plan.platform == Platform::Linux,
         "linux systemd backend requires a linux launch plan"
     );
     anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
+    anyhow::ensure!(!unit_name.is_empty(), "unit name must not be empty");
 
+    // We launch the child as a transient `.service` (NOT a `--scope`)
+    // because:
+    //   * `--scope` is incompatible with `--pipe`, and on systemd 255+
+    //     `systemd-run --scope` with non-TTY stdio errors out with
+    //     "--pty/--pipe is not compatible in timer or --scope mode."
+    //   * `--pipe --wait` makes systemd-run stay in the foreground,
+    //     forward the unit's stdout/stderr through its own pipes (which
+    //     scaler captures), and propagate the unit's exit code.
+    //   * `--collect` auto-removes the transient unit on exit so we
+    //     don't leak failed units in `systemctl --user list-units`.
+    //
+    // The cgroup limits (CPUQuota / MemoryHigh / MemoryMax / MemorySwapMax)
+    // still apply because they are properties of the transient service.
     let mut argv = vec![
         OsString::from("systemd-run"),
         OsString::from("--user"),
-        OsString::from("--scope"),
-        // Suppress systemd-run's "Running as unit: run-XXX.scope" stderr
-        // line so scaler's stderr only contains scaler-owned output. The
-        // scope name is still queryable via `systemctl --user list-units`
-        // for anyone debugging.
+        OsString::from("--pipe"),
+        OsString::from("--wait"),
+        OsString::from("--collect"),
+        // Suppress systemd-run's "Running as unit: ..." stderr line so
+        // scaler's stderr only contains scaler-owned output.
         OsString::from("--quiet"),
+        OsString::from(format!("--unit={unit_name}")),
     ];
-
-    if plan.resource_spec.interactive == InteractiveMode::Always {
-        argv.push(OsString::from("--pty"));
-    }
 
     if let Some(cpu) = plan.resource_spec.cpu {
         argv.push(OsString::from(format!(
@@ -205,25 +218,124 @@ impl Backend for LinuxSystemdBackend {
 
     fn launch(&self, plan: &LaunchPlan) -> anyhow::Result<RunningHandle> {
         let io_mode = preferred_io_mode(plan.resource_spec.interactive);
-        let argv = build_systemd_run_argv(plan)?;
+        let unit_name = generate_unit_name();
+        let argv = build_systemd_run_argv(plan, &unit_name)?;
         let command = command_from_argv(&argv, io_mode)?;
-        spawn_with_bookkeeping(command, io_mode)
+        let handle = spawn_with_bookkeeping(command, io_mode)?;
+        unit_registry()
+            .lock()
+            .unwrap()
+            .insert(handle.root_pid, UnitState::new(unit_name));
+        Ok(handle)
     }
 
     fn try_wait(
         &self,
         handle: &mut RunningHandle,
     ) -> anyhow::Result<Option<std::process::ExitStatus>> {
-        try_wait_via_registry(handle.root_pid)
+        let status = try_wait_via_registry(handle.root_pid)?;
+        if status.is_some() {
+            unit_registry().lock().unwrap().remove(&handle.root_pid);
+        }
+        Ok(status)
     }
 
     fn sample(&self, handle: &RunningHandle) -> anyhow::Result<Sample> {
-        crate::core::sampling::sample_process_tree(handle.root_pid)
+        let main_pid = resolve_main_pid(handle.root_pid)
+            .context("transient unit MainPID not yet available")?;
+        crate::core::sampling::sample_process_tree(main_pid)
     }
 
     fn terminate(&self, handle: &RunningHandle, signal: Signal) -> anyhow::Result<()> {
-        terminate_process_group(handle.root_pid, signal)
+        let unit_name = unit_registry()
+            .lock()
+            .unwrap()
+            .get(&handle.root_pid)
+            .map(|state| state.unit_name.clone());
+        let Some(unit_name) = unit_name else {
+            // Unit already gone (e.g. process exited between try_wait and
+            // terminate); nothing to do.
+            return Ok(());
+        };
+        let signal_flag = match signal {
+            Signal::Interrupt => "SIGINT",
+            Signal::Terminate => "SIGTERM",
+            Signal::Kill => "SIGKILL",
+        };
+        let status = Command::new("systemctl")
+            .args([
+                "--user",
+                "kill",
+                "--kill-whom=all",
+                &format!("--signal={signal_flag}"),
+                &unit_name,
+            ])
+            .status()
+            .with_context(|| format!("failed to send {signal_flag} to unit {unit_name}"))?;
+        // Don't hard-fail on non-zero status: the unit may have just exited.
+        let _ = status;
+        Ok(())
     }
+}
+
+#[derive(Debug)]
+struct UnitState {
+    unit_name: String,
+    cached_main_pid: Option<u32>,
+}
+
+impl UnitState {
+    fn new(unit_name: String) -> Self {
+        Self {
+            unit_name,
+            cached_main_pid: None,
+        }
+    }
+}
+
+fn unit_registry() -> &'static Mutex<HashMap<u32, UnitState>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<u32, UnitState>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn generate_unit_name() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("scaler-run-{}-{nanos}.service", std::process::id())
+}
+
+fn resolve_main_pid(root_pid: u32) -> Option<u32> {
+    let unit_name = {
+        let registry = unit_registry().lock().unwrap();
+        let state = registry.get(&root_pid)?;
+        if let Some(cached) = state.cached_main_pid {
+            return Some(cached);
+        }
+        state.unit_name.clone()
+    };
+    let main_pid = query_main_pid(&unit_name)?;
+    let mut registry = unit_registry().lock().unwrap();
+    if let Some(state) = registry.get_mut(&root_pid) {
+        state.cached_main_pid = Some(main_pid);
+    }
+    Some(main_pid)
+}
+
+fn query_main_pid(unit_name: &str) -> Option<u32> {
+    let output = Command::new("systemctl")
+        .args(["--user", "show", "--property=MainPID", "--value", unit_name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    if value == 0 { None } else { Some(value) }
 }
 
 /// Test seam: returns the argv that `LinuxSystemdBackend.launch` would
@@ -233,7 +345,7 @@ impl Backend for LinuxSystemdBackend {
 pub fn linux_systemd_command_preview_for_test(
     plan: &LaunchPlan,
 ) -> anyhow::Result<Vec<std::ffi::OsString>> {
-    build_systemd_run_argv(plan)
+    build_systemd_run_argv(plan, "scaler-run-test.service")
 }
 
 #[cfg(test)]

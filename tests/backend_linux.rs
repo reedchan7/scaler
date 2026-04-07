@@ -10,8 +10,10 @@ mod linux_tests {
         },
     };
 
+    const TEST_UNIT: &str = "scaler-run-test.service";
+
     #[test]
-    fn linux_command_uses_scope_and_memory_mapping() {
+    fn linux_command_uses_pipe_wait_and_memory_mapping() {
         let plan = LaunchPlan {
             argv: vec![OsString::from("echo"), OsString::from("ok")],
             resource_spec: ResourceSpec {
@@ -24,7 +26,7 @@ mod linux_tests {
             platform: Platform::Linux,
         };
 
-        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = build_systemd_run_argv(&plan, TEST_UNIT).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -32,7 +34,14 @@ mod linux_tests {
 
         assert_eq!(argv[0], "systemd-run");
         assert!(argv.iter().any(|value| value == "--user"));
-        assert!(argv.iter().any(|value| value == "--scope"));
+        assert!(argv.iter().any(|value| value == "--pipe"));
+        assert!(argv.iter().any(|value| value == "--wait"));
+        assert!(argv.iter().any(|value| value == "--collect"));
+        assert!(!argv.iter().any(|value| value == "--scope"));
+        assert!(
+            argv.iter()
+                .any(|value| value == &format!("--unit={TEST_UNIT}"))
+        );
         assert!(argv.iter().any(|value| value == "--property=CPUQuota=100%"));
         assert!(
             argv.iter()
@@ -48,8 +57,6 @@ mod linux_tests {
         );
         assert!(argv.iter().any(|value| value == "--quiet"));
         let delimiter_index = argv.iter().position(|value| value == "--").unwrap();
-        // systemd-run / --user / --scope / --quiet / 4 properties / --
-        assert_eq!(delimiter_index, 8);
         assert_eq!(&argv[delimiter_index + 1..], ["echo", "ok"]);
     }
 
@@ -61,7 +68,7 @@ mod linux_tests {
             platform: Platform::Linux,
         };
 
-        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = build_systemd_run_argv(&plan, TEST_UNIT).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -72,8 +79,11 @@ mod linux_tests {
             vec![
                 "systemd-run".to_string(),
                 "--user".to_string(),
-                "--scope".to_string(),
+                "--pipe".to_string(),
+                "--wait".to_string(),
+                "--collect".to_string(),
                 "--quiet".to_string(),
+                format!("--unit={TEST_UNIT}"),
                 "--".to_string(),
                 "-tool".to_string(),
                 "arg".to_string(),
@@ -92,7 +102,7 @@ mod linux_tests {
             platform: Platform::Linux,
         };
 
-        let argv = build_systemd_run_argv(&plan).unwrap();
+        let argv = build_systemd_run_argv(&plan, TEST_UNIT).unwrap();
         let argv = argv
             .iter()
             .map(|value| value.to_string_lossy().into_owned())
@@ -103,8 +113,11 @@ mod linux_tests {
             vec![
                 "systemd-run".to_string(),
                 "--user".to_string(),
-                "--scope".to_string(),
+                "--pipe".to_string(),
+                "--wait".to_string(),
+                "--collect".to_string(),
                 "--quiet".to_string(),
+                format!("--unit={TEST_UNIT}"),
                 "--".to_string(),
                 "sh".to_string(),
                 "-lc".to_string(),
@@ -124,7 +137,9 @@ mod linux_tests {
             platform: Platform::Linux,
         };
 
-        let error = build_systemd_run_argv(&plan).unwrap_err().to_string();
+        let error = build_systemd_run_argv(&plan, TEST_UNIT)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("exactly one script token"));
     }
@@ -280,7 +295,9 @@ mod linux_tests {
 
         assert_eq!(preview[0], "systemd-run");
         assert!(preview.iter().any(|value| value == "--user"));
-        assert!(preview.iter().any(|value| value == "--scope"));
+        assert!(preview.iter().any(|value| value == "--pipe"));
+        assert!(preview.iter().any(|value| value == "--wait"));
+        assert!(preview.iter().any(|value| value == "--collect"));
         assert!(
             preview
                 .iter()
@@ -358,7 +375,9 @@ mod linux_tests {
 
         let recorded = fs::read_to_string(&log_path).unwrap();
         assert!(recorded.contains("--user"), "argv: {recorded}");
-        assert!(recorded.contains("--scope"), "argv: {recorded}");
+        assert!(recorded.contains("--pipe"), "argv: {recorded}");
+        assert!(recorded.contains("--wait"), "argv: {recorded}");
+        assert!(recorded.contains("--collect"), "argv: {recorded}");
         assert!(
             recorded.contains("--property=CPUQuota=50%"),
             "argv: {recorded}"
