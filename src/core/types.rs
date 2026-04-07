@@ -200,6 +200,22 @@ impl CapabilityReport {
             warnings: Vec::new(),
         }
     }
+
+    /// Test-only "everything is fine" preset. Used by `RunOutcome::fixture_for_test`
+    /// so summary unit tests don't accidentally trigger the context block.
+    #[doc(hidden)]
+    pub fn fully_enforced_for_test() -> Self {
+        Self {
+            platform: Platform::Linux,
+            backend: BackendKind::LinuxSystemd,
+            backend_state: CapabilityLevel::Enforced,
+            cpu: CapabilityLevel::Enforced,
+            memory: CapabilityLevel::Enforced,
+            interactive: CapabilityLevel::Enforced,
+            prerequisites: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,4 +268,12 @@ pub struct RunOutcome {
     /// Host logical core count. Used by the summary as a fallback
     /// denominator when `--cpu` was not supplied.
     pub host_logical_cores: Option<u32>,
+    /// Capability snapshot from the backend at launch time. Drives the
+    /// context block above the summary card so users can see exactly
+    /// which guarantees applied for the run that just finished.
+    pub capabilities: CapabilityReport,
+    /// Warnings accumulated over the run (initial backend warnings plus
+    /// any added by the run loop, e.g. when the monitor TUI fails after
+    /// launch and we fall back to plain rendering).
+    pub warnings: Vec<String>,
 }

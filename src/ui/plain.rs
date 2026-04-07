@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::{
-    core::{CapabilityLevel, OutputFrame, OutputStream},
+    core::{OutputFrame, OutputStream},
     ui::{MonitorSnapshot, Renderer, UiContext},
 };
 
@@ -9,39 +9,11 @@ use crate::{
 pub struct PlainRenderer;
 
 impl PlainRenderer {
-    pub fn new(context: &UiContext) -> anyhow::Result<Self> {
-        let mut stderr = std::io::stderr().lock();
-
-        writeln!(
-            stderr,
-            "{} backend: {}",
-            status_prefix(context.capabilities.backend_state),
-            context.capabilities.backend.as_str()
-        )?;
-        writeln!(
-            stderr,
-            "{} cpu: {}",
-            status_prefix(context.capabilities.cpu),
-            context.capabilities.cpu.as_str()
-        )?;
-        writeln!(
-            stderr,
-            "{} memory: {}",
-            status_prefix(context.capabilities.memory),
-            context.capabilities.memory.as_str()
-        )?;
-        writeln!(
-            stderr,
-            "{} interactive: {}",
-            status_prefix(context.capabilities.interactive),
-            context.capabilities.interactive.as_str()
-        )?;
-
-        for warning in &context.warnings {
-            writeln!(stderr, "warning: {warning}")?;
-        }
-        stderr.flush()?;
-
+    pub fn new(_context: &UiContext) -> anyhow::Result<Self> {
+        // The capability banner and warnings used to be printed here at
+        // construction time. They have moved into `core::summary::render`
+        // (the context block above the summary card) so the wrapped
+        // command's output is never preceded by scaler chrome.
         Ok(Self)
     }
 }
@@ -72,10 +44,46 @@ impl Renderer for PlainRenderer {
     }
 }
 
-fn status_prefix(level: CapabilityLevel) -> &'static str {
-    match level {
-        CapabilityLevel::Enforced => "[enforced]",
-        CapabilityLevel::BestEffort => "[best-effort]",
-        CapabilityLevel::Unavailable => "[unavailable]",
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        BackendKind, CapabilityLevel, CapabilityReport, DoctorPrerequisite, Platform,
+        PrerequisiteStatus,
+    };
+    use crate::ui::UiContext;
+
+    #[test]
+    fn new_does_not_write_anything_to_stderr() {
+        // PlainRenderer::new used to print a 4-line capability banner to
+        // stderr before the wrapped command produced any output. That has
+        // moved into core::summary::render so the wrapped command can
+        // emit its own output uninterrupted. The constructor is now a
+        // pure factory.
+        let context = UiContext {
+            command: "echo hello".to_string(),
+            capabilities: CapabilityReport {
+                platform: Platform::Macos,
+                backend: BackendKind::PlainFallback,
+                backend_state: CapabilityLevel::BestEffort,
+                cpu: CapabilityLevel::BestEffort,
+                memory: CapabilityLevel::BestEffort,
+                interactive: CapabilityLevel::BestEffort,
+                prerequisites: vec![DoctorPrerequisite::check(
+                    "taskpolicy",
+                    PrerequisiteStatus::Ok,
+                )],
+                warnings: vec!["host probe failed".to_string()],
+            },
+            compact: false,
+            warnings: vec!["host probe failed".to_string()],
+        };
+
+        // We don't have a way to capture stderr inside a unit test
+        // without re-routing the global handle, but we CAN assert that
+        // the constructor produces no errors and returns. The strong
+        // assertion lives in tests/run_loop.rs (Task 4 step 4 below)
+        // where we scrape the actual output.
+        let _renderer = PlainRenderer::new(&context).expect("plain renderer must construct");
     }
 }

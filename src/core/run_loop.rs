@@ -121,6 +121,7 @@ impl UiSession {
     fn start(
         selection: &SelectedExecution,
         capabilities: crate::core::CapabilityReport,
+        warnings: &mut Vec<String>,
     ) -> anyhow::Result<Self> {
         let base_context = UiContext {
             command: display_command(&selection.plan),
@@ -145,11 +146,9 @@ impl UiSession {
                 }
                 Err(error) => {
                     record_event("monitor_unavailable");
-                    let context = context_with_extra_warning(
-                        &base_context,
-                        format!("monitor disabled: {error}"),
-                    );
-                    let renderer = PlainRenderer::new(&context)?;
+                    let warning = format!("monitor disabled: {error}");
+                    warnings.push(warning);
+                    let renderer = PlainRenderer::new(&base_context)?;
                     record_event("plain_renderer_active");
                     return Ok(Self {
                         renderer: ActiveUi::Plain(renderer),
@@ -176,9 +175,10 @@ impl UiSession {
         &mut self,
         frame: &OutputFrame,
         rendered_frames: &[OutputFrame],
+        warnings: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         if let Err(error) = self.renderer.render_frame(frame) {
-            return self.handle_runtime_failure(error, rendered_frames);
+            return self.handle_runtime_failure(error, rendered_frames, warnings);
         }
         Ok(())
     }
@@ -187,9 +187,10 @@ impl UiSession {
         &mut self,
         snapshot: &MonitorSnapshot,
         rendered_frames: &[OutputFrame],
+        warnings: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         if let Err(error) = self.renderer.render_snapshot(snapshot) {
-            return self.handle_runtime_failure(error, rendered_frames);
+            return self.handle_runtime_failure(error, rendered_frames, warnings);
         }
         Ok(())
     }
@@ -209,6 +210,7 @@ impl UiSession {
         &mut self,
         error: anyhow::Error,
         rendered_frames: &[OutputFrame],
+        warnings: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         if !self.renderer.is_tui() {
             return Err(error);
@@ -216,11 +218,9 @@ impl UiSession {
 
         record_event("monitor_failed");
         self.restore_once()?;
-        let context = context_with_extra_warning(
-            &self.base_context,
-            format!("monitor disabled after launch: {error}"),
-        );
-        let mut renderer = PlainRenderer::new(&context)?;
+        let warning = format!("monitor disabled after launch: {error}");
+        warnings.push(warning);
+        let mut renderer = PlainRenderer::new(&self.base_context)?;
         renderer.replay(rendered_frames)?;
         self.renderer = ActiveUi::Plain(renderer);
         record_event("plain_renderer_continues");
@@ -233,11 +233,12 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
 
     clear_execution_trace();
     let capabilities = backend.detect();
+    let mut warnings = capabilities.warnings.clone();
     let selection = select_execution(&plan)?;
     record_event("launch");
     let mut handle = backend.launch(&selection.plan)?;
     record_event("launch_complete");
-    let mut ui = UiSession::start(&selection, capabilities)?;
+    let mut ui = UiSession::start(&selection, capabilities.clone(), &mut warnings)?;
     record_event("interactive_mode_selected");
     match selection.io_mode {
         IoMode::Pipes => record_event("pipe_streams"),
@@ -257,11 +258,21 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
     let mut rendered_frames = Vec::new();
 
     loop {
-        drain_output_frames(handle.root_pid, &mut ui, &mut rendered_frames)?;
+        drain_output_frames(
+            handle.root_pid,
+            &mut ui,
+            &mut rendered_frames,
+            &mut warnings,
+        )?;
 
         if let Some(exit_status) = backend.try_wait(&mut handle)? {
             finalize_process_output(handle.root_pid, control_interval)?;
-            drain_output_frames(handle.root_pid, &mut ui, &mut rendered_frames)?;
+            drain_output_frames(
+                handle.root_pid,
+                &mut ui,
+                &mut rendered_frames,
+                &mut warnings,
+            )?;
             remove_process_state(handle.root_pid);
             ui.restore_once()?;
             let outcome = RunOutcome {
@@ -273,6 +284,8 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
                 samples,
                 cpu_limit_centi_cores: plan.resource_spec.cpu.map(|limit| limit.centi_cores()),
                 host_logical_cores: crate::core::system_cpu::host_logical_cores(),
+                capabilities,
+                warnings,
             };
             // Summary goes to stderr so user pipelines like
             //   scaler run -- jq < x.json > out.json
@@ -327,6 +340,7 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
                         run_status: "running".to_string(),
                     },
                     &rendered_frames,
+                    &mut warnings,
                 )?;
             }
             next_sample_due = Instant::now() + sample_interval;
@@ -585,12 +599,6 @@ fn configured_terminal_state() -> Option<TerminalState> {
     runtime_overrides().lock().unwrap().terminal_state
 }
 
-fn context_with_extra_warning(base: &UiContext, warning: String) -> UiContext {
-    let mut context = base.clone();
-    context.warnings.push(warning);
-    context
-}
-
 fn display_command(plan: &LaunchPlan) -> String {
     render_launch_target_command(plan).unwrap_or_else(|_| {
         plan.argv
@@ -747,6 +755,7 @@ fn drain_output_frames(
     root_pid: u32,
     ui: &mut UiSession,
     rendered_frames: &mut Vec<OutputFrame>,
+    warnings: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let Some(state) = process_state(root_pid) else {
         return Ok(());
@@ -758,7 +767,7 @@ fn drain_output_frames(
     };
 
     for frame in frames {
-        ui.render_frame(&frame, rendered_frames)?;
+        ui.render_frame(&frame, rendered_frames, warnings)?;
         rendered_frames.push(frame);
     }
 

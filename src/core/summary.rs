@@ -1,7 +1,7 @@
 use std::process::ExitStatus;
 use std::time::{Duration, SystemTime};
 
-use crate::core::{RunOutcome, SummarySample};
+use crate::core::{CapabilityLevel, CapabilityReport, RunOutcome, SummarySample};
 
 /// Minimum inner column count for the summary card. Short commands (e.g.
 /// `scaler -- echo hello`) have tiny body rows; without a floor the box
@@ -11,6 +11,10 @@ const MIN_INNER_WIDTH: usize = 38;
 /// `elapsed` (7 chars); values line up at column 11 (2-space indent +
 /// 7-char label + 2-space gap).
 const LABEL_WIDTH: usize = 7;
+/// Label column width for the capability context block. Sized to fit
+/// `interactive` (11 chars). Separate from `LABEL_WIDTH` so changes to
+/// the context block don't ripple into the body row test substrings.
+const CONTEXT_LABEL_WIDTH: usize = 11;
 const INDENT: &str = "  ";
 const HEADER_LABEL: &str = "scaler summary";
 
@@ -37,11 +41,15 @@ pub fn render(outcome: &RunOutcome) -> String {
         ));
     }
 
-    // Inner width = max of (longest body row, header label + breathing
-    // room, MIN_INNER_WIDTH). The header breathing room keeps the title
-    // from hugging the corners when body rows are short.
+    // Build context rows (capabilities + warnings) the same way so the
+    // divider + context block + card all share one inner_width.
+    let context_rows = build_context_rows(&outcome.capabilities, &outcome.warnings);
+
+    // Inner width = max of (longest body row, longest context row,
+    // header label + breathing room, MIN_INNER_WIDTH).
     let longest_body = body
         .iter()
+        .chain(context_rows.iter())
         .map(|row| row.chars().count())
         .max()
         .unwrap_or(0);
@@ -49,13 +57,94 @@ pub fn render(outcome: &RunOutcome) -> String {
     let header_breathing = header_label_cols + 6; // 3 rule chars on each side
     let inner_width = longest_body.max(header_breathing).max(MIN_INNER_WIDTH);
 
-    let mut lines = Vec::with_capacity(body.len() + 2);
+    let mut lines: Vec<String> = Vec::with_capacity(body.len() + context_rows.len() + 4);
+    let outer_width = inner_width + 2;
+    if !context_rows.is_empty() {
+        // Divider matches the card's OUTER width (inner_width + 2 corner
+        // columns) so it looks like a continuous frame above the card.
+        // Context rows are also padded to outer_width so every line in
+        // the rendered output occupies the same horizontal extent.
+        let label = "── scaler ";
+        let rule_cols = outer_width.saturating_sub(label.chars().count());
+        lines.push(format!("{label}{}", "─".repeat(rule_cols)));
+        for row in context_rows {
+            lines.push(format!("{row:<outer_width$}"));
+        }
+    }
     lines.push(render_header(inner_width));
     for row in body {
         lines.push(format!("│{row:<inner_width$}│"));
     }
     lines.push(render_footer(inner_width));
     lines.join("\n")
+}
+
+/// Build the rows that make up the context block. Returns an empty vec
+/// when everything is enforced and there are no warnings, so the caller
+/// can suppress the divider entirely on the happy path.
+fn build_context_rows(capabilities: &CapabilityReport, warnings: &[String]) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    let any_degraded = !is_enforced(capabilities.backend_state)
+        || !is_enforced(capabilities.cpu)
+        || !is_enforced(capabilities.memory)
+        || !is_enforced(capabilities.interactive);
+
+    if !any_degraded && warnings.is_empty() {
+        return rows;
+    }
+
+    // The `backend` row's value is a backend name (e.g. `macos_taskpolicy`),
+    // so it needs the level tag suffix to convey enforcement state. The
+    // other three facet rows have the level itself as their value
+    // (`enforced` / `best-effort` / `unavailable`), so a suffix would be
+    // redundant — we render them tag-free.
+    rows.push(build_backend_row(
+        capabilities.backend.as_str(),
+        capabilities.backend_state,
+    ));
+    rows.push(build_context_row("cpu", capability_value(capabilities.cpu)));
+    rows.push(build_context_row(
+        "memory",
+        capability_value(capabilities.memory),
+    ));
+    rows.push(build_context_row(
+        "interactive",
+        capability_value(capabilities.interactive),
+    ));
+    for warning in warnings {
+        // Warning rows sit at indent level only (no label column padding)
+        // so they stand out from the labeled facet rows above.
+        rows.push(format!("{INDENT}warning: {warning}"));
+    }
+    rows
+}
+
+fn build_context_row(label: &str, value: &str) -> String {
+    format!("{INDENT}{label:<CONTEXT_LABEL_WIDTH$}  {value}")
+}
+
+fn is_enforced(level: CapabilityLevel) -> bool {
+    matches!(level, CapabilityLevel::Enforced)
+}
+
+fn capability_value(level: CapabilityLevel) -> &'static str {
+    match level {
+        CapabilityLevel::Enforced => "enforced",
+        CapabilityLevel::BestEffort => "best-effort",
+        CapabilityLevel::Unavailable => "unavailable",
+    }
+}
+
+fn build_backend_row(value: &str, level: CapabilityLevel) -> String {
+    let suffix = match level {
+        CapabilityLevel::Enforced => "  [enforced]",
+        CapabilityLevel::BestEffort => "  [best-effort]",
+        CapabilityLevel::Unavailable => "  [unavailable]",
+    };
+    format!(
+        "{INDENT}{label:<CONTEXT_LABEL_WIDTH$}  {value}{suffix}",
+        label = "backend"
+    )
 }
 
 fn build_row(label: &str, value: &str) -> String {
@@ -297,6 +386,8 @@ impl RunOutcome {
             ],
             cpu_limit_centi_cores: None,
             host_logical_cores: None,
+            capabilities: crate::core::CapabilityReport::fully_enforced_for_test(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -318,6 +409,7 @@ fn success_exit_status() -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{BackendKind, CapabilityLevel, CapabilityReport, Platform};
 
     #[cfg(unix)]
     fn exit_status_from_signal(signal: i32) -> ExitStatus {
@@ -745,5 +837,118 @@ mod tests {
         assert!(!rendered.contains("  memory "));
         let last = rendered.lines().last().unwrap();
         assert!(last.starts_with('└') && last.ends_with('┘'));
+    }
+
+    #[test]
+    fn render_omits_context_block_when_everything_enforced_and_no_warnings() {
+        let outcome = RunOutcome::fixture_for_test();
+        let rendered = render(&outcome);
+        // Fixture defaults to fully-enforced capabilities and no warnings,
+        // so render should produce ONLY the summary card — no `── scaler ──`
+        // divider, no `backend` row, no `warning:` row.
+        // Use `"── scaler ─"` to distinguish the divider line from the header
+        // (`┌──── scaler summary ───┐` also contains `"── scaler"` so we need
+        // the rule-after-space pattern unique to the divider).
+        assert!(!rendered.contains("── scaler ─"));
+        assert!(!rendered.contains("backend"));
+        assert!(!rendered.contains("warning:"));
+        // Card itself is still there.
+        assert!(rendered.starts_with('┌'));
+        assert!(rendered.contains(" scaler summary "));
+    }
+
+    #[test]
+    fn render_emits_context_block_when_capability_is_degraded() {
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.capabilities = CapabilityReport {
+            platform: Platform::Macos,
+            backend: BackendKind::MacosTaskpolicy,
+            backend_state: CapabilityLevel::BestEffort,
+            cpu: CapabilityLevel::BestEffort,
+            memory: CapabilityLevel::BestEffort,
+            interactive: CapabilityLevel::BestEffort,
+            prerequisites: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let rendered = render(&outcome);
+        // Divider precedes the context block.
+        assert!(rendered.contains("── scaler ─"));
+        // Each capability row appears with the [best-effort] tag.
+        assert!(rendered.contains("backend"));
+        assert!(rendered.contains("macos_taskpolicy"));
+        assert!(rendered.contains("[best-effort]"));
+        assert!(rendered.contains("cpu"));
+        assert!(rendered.contains("memory"));
+        assert!(rendered.contains("interactive"));
+        // Card still renders below the context.
+        assert!(rendered.contains(" scaler summary "));
+    }
+
+    #[test]
+    fn render_emits_warning_rows_when_warnings_present() {
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.warnings = vec![
+            "monitor disabled: terminal too small".to_string(),
+            "host probe failed".to_string(),
+        ];
+        let rendered = render(&outcome);
+        // Even with everything enforced, warnings trigger the context
+        // block (so users actually see the warning instead of having it
+        // swallowed).
+        assert!(rendered.contains("── scaler ─"));
+        assert!(rendered.contains("warning: monitor disabled: terminal too small"));
+        assert!(rendered.contains("warning: host probe failed"));
+    }
+
+    #[test]
+    fn render_facet_rows_show_value_text_without_tag() {
+        // Facet rows (cpu/memory/interactive) carry the level as their
+        // VALUE text, not as a separate tag. So a "best-effort" facet
+        // renders as `interactive  best-effort` with no `[best-effort]`
+        // suffix tag — the suffix would be redundant and noisy.
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.capabilities = CapabilityReport {
+            platform: Platform::Linux,
+            backend: BackendKind::LinuxSystemd,
+            backend_state: CapabilityLevel::Enforced,
+            cpu: CapabilityLevel::Enforced,
+            memory: CapabilityLevel::Enforced,
+            interactive: CapabilityLevel::BestEffort,
+            prerequisites: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let rendered = render(&outcome);
+        let interactive_line = rendered
+            .lines()
+            .find(|line| line.contains("interactive"))
+            .expect("expected an `interactive` row");
+        assert!(interactive_line.contains("best-effort"));
+        // No bracketed tag on the facet row itself.
+        assert!(!interactive_line.contains("[best-effort]"));
+    }
+
+    #[test]
+    fn render_backend_row_carries_level_tag() {
+        // The backend row's value is the backend NAME (linux_systemd /
+        // macos_taskpolicy / plain_fallback), so it needs the suffix tag
+        // to communicate the enforcement level.
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.capabilities = CapabilityReport {
+            platform: Platform::Linux,
+            backend: BackendKind::LinuxSystemd,
+            backend_state: CapabilityLevel::Enforced,
+            cpu: CapabilityLevel::Enforced,
+            memory: CapabilityLevel::Enforced,
+            // Trigger the context block by degrading at least one facet.
+            interactive: CapabilityLevel::BestEffort,
+            prerequisites: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let rendered = render(&outcome);
+        let backend_line = rendered
+            .lines()
+            .find(|line| line.contains("backend") && line.contains("linux_systemd"))
+            .expect("expected a `backend` row");
+        assert!(backend_line.contains("[enforced]"));
     }
 }
