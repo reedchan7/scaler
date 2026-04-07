@@ -238,5 +238,8 @@ pub struct RunOutcome {
     pub exit_status: ExitStatus,
     pub elapsed: Duration,
     pub peak_memory: Option<u64>,
+    /// Memory cap requested via `--mem`, in bytes. Used by the summary
+    /// to show peak usage as a percent of the user's own budget.
+    pub mem_limit_bytes: Option<u64>,
     pub samples: Vec<SummarySample>,
 }

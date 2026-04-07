@@ -3,12 +3,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::core::{RunOutcome, SummarySample};
 
-/// Total visual width of the summary card (in monospace columns). The
-/// longest body row currently fits comfortably inside 38 inner columns,
-/// which leaves two columns for the left `│` and right `│` borders.
-const SUMMARY_WIDTH: usize = 40;
-/// Inner column count between the `│` borders.
-const INNER_WIDTH: usize = SUMMARY_WIDTH - 2;
+/// Minimum inner column count for the summary card. Short commands (e.g.
+/// `scaler -- echo hello`) have tiny body rows; without a floor the box
+/// would shrink to about 15 columns and look cramped.
+const MIN_INNER_WIDTH: usize = 38;
 /// Width of the label column inside the card body. The longest label is
 /// `elapsed` (7 chars); values line up at column 11 (2-space indent +
 /// 7-char label + 2-space gap).
@@ -17,49 +15,54 @@ const INDENT: &str = "  ";
 const HEADER_LABEL: &str = "scaler summary";
 
 pub fn render(outcome: &RunOutcome) -> String {
-    let mut lines = vec![render_header()];
-
-    push_row(&mut lines, "exit", &format_exit_status(outcome.exit_status));
-    push_row(&mut lines, "elapsed", &format_duration(outcome.elapsed));
-
+    // Build every body row as raw content first (no borders, no padding)
+    // so we can measure the widest one before deciding the card width.
+    let mut body: Vec<String> = Vec::with_capacity(4);
+    body.push(build_row("exit", &format_exit_status(outcome.exit_status)));
+    body.push(build_row("elapsed", &format_duration(outcome.elapsed)));
     if let Some(peak) = outcome.peak_memory {
-        push_row(&mut lines, "memory", &format!("max {}", format_bytes(peak)));
+        body.push(build_row(
+            "memory",
+            &format_memory(peak, outcome.mem_limit_bytes),
+        ));
     }
-
     if let Some(stats) = cpu_stats(&outcome.samples) {
-        push_row(
-            &mut lines,
-            "cpu",
-            &format!(
-                "avg {}, max {}",
-                format_cores(stats.avg),
-                format_cores(stats.max)
-            ),
-        );
+        body.push(build_row("cpu", &format_cpu_stats(stats)));
     }
 
-    lines.push(render_footer());
+    // Inner width = max of (longest body row, header label + breathing
+    // room, MIN_INNER_WIDTH). The header breathing room keeps the title
+    // from hugging the corners when body rows are short.
+    let longest_body = body
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0);
+    let header_label_cols = format!(" {HEADER_LABEL} ").chars().count();
+    let header_breathing = header_label_cols + 6; // 3 rule chars on each side
+    let inner_width = longest_body.max(header_breathing).max(MIN_INNER_WIDTH);
+
+    let mut lines = Vec::with_capacity(body.len() + 2);
+    lines.push(render_header(inner_width));
+    for row in body {
+        lines.push(format!("│{row:<inner_width$}│"));
+    }
+    lines.push(render_footer(inner_width));
     lines.join("\n")
 }
 
-fn push_row(lines: &mut Vec<String>, label: &str, value: &str) {
-    // Compose the content column (indent + label + value), then pad it
-    // out to INNER_WIDTH so every row's trailing `│` lines up vertically.
-    let content = format!("{INDENT}{label:<LABEL_WIDTH$}  {value}");
-    lines.push(format!("│{content:<INNER_WIDTH$}│"));
+fn build_row(label: &str, value: &str) -> String {
+    format!("{INDENT}{label:<LABEL_WIDTH$}  {value}")
 }
 
-fn render_header() -> String {
+fn render_header(inner_width: usize) -> String {
     // ┌─────────── scaler summary ───────────┐
     //
-    // Label sits centered on the top rule between the two corner glyphs.
-    //   - 1 column each for `┌` and `┐`
-    //   - L columns for ` scaler summary ` (with surrounding spaces)
-    //   - the remaining columns are split between left and right rules,
-    //     with the right side getting the extra column when the split is odd
+    // Label centered on the top rule between the two corner glyphs. The
+    // right side gets the extra column when the rule-space is odd.
     let label = format!(" {HEADER_LABEL} ");
     let label_cols = label.chars().count();
-    let total_rule_cols = INNER_WIDTH.saturating_sub(label_cols);
+    let total_rule_cols = inner_width.saturating_sub(label_cols);
     let left_rule_cols = total_rule_cols / 2;
     let right_rule_cols = total_rule_cols - left_rule_cols;
     format!(
@@ -69,9 +72,36 @@ fn render_header() -> String {
     )
 }
 
-fn render_footer() -> String {
+fn render_footer(inner_width: usize) -> String {
     // └──────────────────────────────────────┘
-    format!("└{}┘", "─".repeat(INNER_WIDTH))
+    format!("└{}┘", "─".repeat(inner_width))
+}
+
+/// Memory row value. Without a `--mem` limit we just show the peak in
+/// human units: `max 26.4 MiB`. With a limit we append the peak as a
+/// percent of that limit so the user can see how close the process got
+/// to their own budget: `max 26.4 MiB (10.3%)`. The percent is suppressed
+/// if the limit is zero (which `clap` would reject anyway).
+fn format_memory(peak: u64, limit: Option<u64>) -> String {
+    let head = format!("max {}", format_bytes(peak));
+    match limit {
+        Some(limit_bytes) if limit_bytes > 0 => {
+            let percent = (peak as f64 / limit_bytes as f64) * 100.0;
+            format!("{head} ({percent:.1}%)")
+        }
+        _ => head,
+    }
+}
+
+/// `avg <Nc> (<P %>), max <Nc> (<P %>)` — cores first, then the raw
+/// `%cpu` value from `ps` in parentheses so power users can see both
+/// views at once.
+fn format_cpu_stats(stats: CpuStats) -> String {
+    let avg_cores = format_cores(stats.avg);
+    let max_cores = format_cores(stats.max);
+    let avg_pct = stats.avg;
+    let max_pct = stats.max;
+    format!("avg {avg_cores} ({avg_pct:.1}%), max {max_cores} ({max_pct:.1}%)")
 }
 
 fn format_exit_status(status: ExitStatus) -> String {
@@ -107,8 +137,31 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Human-readable duration formatter with unit changes that match how
+/// people talk about command runtimes:
+///
+///   < 1 s    → `29ms`       (integer milliseconds)
+///   < 1 min  → `3.260s`     (3-decimal seconds, unchanged from 0.2.x)
+///   < 1 hour → `2m 15.4s`   (minutes + one-decimal seconds)
+///   ≥ 1 hour → `1h 23m 45s` (hours + minutes + integer seconds)
 pub fn format_duration(duration: Duration) -> String {
-    format!("{:.3}s", duration.as_secs_f64())
+    let total_seconds = duration.as_secs_f64();
+    if total_seconds < 1.0 {
+        return format!("{}ms", duration.as_millis());
+    }
+    if total_seconds < 60.0 {
+        return format!("{total_seconds:.3}s");
+    }
+    if total_seconds < 3600.0 {
+        let minutes = (total_seconds / 60.0).floor() as u64;
+        let seconds = total_seconds - (minutes * 60) as f64;
+        return format!("{minutes}m {seconds:.1}s");
+    }
+    let hours = (total_seconds / 3600.0).floor() as u64;
+    let after_hours = total_seconds - (hours * 3600) as f64;
+    let minutes = (after_hours / 60.0).floor() as u64;
+    let seconds = after_hours - (minutes * 60) as f64;
+    format!("{hours}h {minutes}m {seconds:.0}s")
 }
 
 /// Convert a `ps`-style cpu percentage to logical cores. 100 % == 1 core,
@@ -144,6 +197,7 @@ impl RunOutcome {
             exit_status: success_exit_status(),
             elapsed: Duration::from_secs(3),
             peak_memory: Some(4_194_304),
+            mem_limit_bytes: None,
             samples: vec![
                 SummarySample {
                     captured_at: SystemTime::UNIX_EPOCH,
@@ -191,6 +245,90 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
         assert_eq!(format_bytes(1_572_864), "1.5 MiB");
         assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GiB");
+    }
+
+    #[test]
+    fn format_memory_without_limit_shows_only_human_peak() {
+        assert_eq!(format_memory(4_194_304, None), "max 4.0 MiB");
+        assert_eq!(format_memory(512, None), "max 512 B");
+        assert_eq!(format_memory(1_610_612_736, None), "max 1.5 GiB");
+    }
+
+    #[test]
+    fn format_memory_with_limit_shows_percent_of_limit() {
+        // Peak 26 MiB of a 256 MiB budget -> about 10.2 %.
+        assert_eq!(
+            format_memory(26 * 1024 * 1024, Some(256 * 1024 * 1024)),
+            "max 26.0 MiB (10.2%)"
+        );
+        // Peak exactly equal to the limit.
+        assert_eq!(
+            format_memory(64 * 1024 * 1024, Some(64 * 1024 * 1024)),
+            "max 64.0 MiB (100.0%)"
+        );
+        // Over-limit: sampler can catch the process after it overshot
+        // MemoryMax but before it was OOM-killed.
+        assert_eq!(
+            format_memory(70 * 1024 * 1024, Some(64 * 1024 * 1024)),
+            "max 70.0 MiB (109.4%)"
+        );
+    }
+
+    #[test]
+    fn format_memory_treats_zero_limit_as_no_limit() {
+        // `clap` would reject --mem 0 at parse time, but the formatter
+        // should not divide by zero if we ever get here by accident.
+        assert_eq!(format_memory(4_194_304, Some(0)), "max 4.0 MiB");
+    }
+
+    #[test]
+    fn format_cpu_stats_includes_cores_and_percent() {
+        assert_eq!(
+            format_cpu_stats(CpuStats { avg: 0.0, max: 0.0 }),
+            "avg 0.00c (0.0%), max 0.00c (0.0%)"
+        );
+        assert_eq!(
+            format_cpu_stats(CpuStats {
+                avg: 18.75,
+                max: 25.0,
+            }),
+            "avg 0.19c (18.8%), max 0.25c (25.0%)"
+        );
+        assert_eq!(
+            format_cpu_stats(CpuStats {
+                avg: 450.0,
+                max: 800.0,
+            }),
+            "avg 4.50c (450.0%), max 8.00c (800.0%)"
+        );
+    }
+
+    #[test]
+    fn format_duration_sub_second_shows_integer_milliseconds() {
+        assert_eq!(format_duration(Duration::from_millis(0)), "0ms");
+        assert_eq!(format_duration(Duration::from_millis(29)), "29ms");
+        assert_eq!(format_duration(Duration::from_millis(999)), "999ms");
+    }
+
+    #[test]
+    fn format_duration_seconds_range_uses_three_decimals() {
+        assert_eq!(format_duration(Duration::from_millis(1000)), "1.000s");
+        assert_eq!(format_duration(Duration::from_millis(3260)), "3.260s");
+        assert_eq!(format_duration(Duration::from_secs(59)), "59.000s");
+    }
+
+    #[test]
+    fn format_duration_minutes_range_uses_m_and_one_decimal() {
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m 0.0s");
+        assert_eq!(format_duration(Duration::from_secs(125)), "2m 5.0s");
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59m 59.0s");
+    }
+
+    #[test]
+    fn format_duration_hours_range_uses_hms_with_integer_seconds() {
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h 0m 0s");
+        assert_eq!(format_duration(Duration::from_secs(3725)), "1h 2m 5s");
+        assert_eq!(format_duration(Duration::from_secs(7385)), "2h 3m 5s");
     }
 
     #[test]
@@ -251,14 +389,15 @@ mod tests {
 
     #[test]
     fn render_header_centers_label_between_corners() {
-        let header = render_header();
+        let inner_width = 38;
+        let header = render_header(inner_width);
         // Always opens with `┌` and closes with `┐`.
         assert!(header.starts_with('┌'));
         assert!(header.ends_with('┐'));
         // The label sits in the middle, surrounded by rule columns.
         assert!(header.contains(" scaler summary "));
-        // Padded to exactly SUMMARY_WIDTH columns.
-        assert_eq!(header.chars().count(), SUMMARY_WIDTH);
+        // Padded to exactly inner_width + 2 (for the corner glyphs).
+        assert_eq!(header.chars().count(), inner_width + 2);
         // Sanity-check that the label is roughly centered: the gap between
         // the left corner and the label should be within one column of the
         // gap between the label and the right corner.
@@ -275,25 +414,25 @@ mod tests {
 
     #[test]
     fn render_footer_is_corners_around_full_rule() {
-        let footer = render_footer();
+        let inner_width = 38;
+        let footer = render_footer(inner_width);
         assert!(footer.starts_with('└'));
         assert!(footer.ends_with('┘'));
-        assert_eq!(footer.chars().count(), SUMMARY_WIDTH);
+        assert_eq!(footer.chars().count(), inner_width + 2);
         // Every column between the two corners is a horizontal rule.
-        let inner: String = footer.chars().skip(1).take(INNER_WIDTH).collect();
+        let inner: String = footer.chars().skip(1).take(inner_width).collect();
         assert!(inner.chars().all(|c| c == '─'));
     }
 
     #[test]
-    fn render_body_rows_fill_to_inner_width_with_vertical_borders() {
+    fn render_body_rows_all_share_the_same_width() {
         let rendered = render(&RunOutcome::fixture_for_test());
-        for line in rendered.lines() {
-            // Every row — header, body, footer — is exactly SUMMARY_WIDTH
-            // monospace columns wide.
+        let mut widths = rendered.lines().map(|line| line.chars().count());
+        let first = widths.next().unwrap();
+        for width in widths {
             assert_eq!(
-                line.chars().count(),
-                SUMMARY_WIDTH,
-                "line has wrong width: {line:?}",
+                width, first,
+                "rows disagree on width: got {width}, expected {first}",
             );
         }
         // At least one body row opens with │ and closes with │.
@@ -303,6 +442,30 @@ mod tests {
                 .any(|line| line.starts_with('│') && line.ends_with('│')),
             "expected at least one │...│ row",
         );
+    }
+
+    #[test]
+    fn render_card_grows_to_fit_the_longest_body_row() {
+        // Fixture cpu row is the widest at roughly 47 columns, which is
+        // longer than the MIN_INNER_WIDTH floor of 38.
+        let rendered = render(&RunOutcome::fixture_for_test());
+        let width = rendered.lines().next().unwrap().chars().count();
+        assert!(
+            width > MIN_INNER_WIDTH + 2,
+            "card did not grow to fit body: {width} columns",
+        );
+    }
+
+    #[test]
+    fn render_card_falls_back_to_min_width_for_tiny_body() {
+        // Build a fixture with just exit + elapsed (no memory, no cpu).
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.peak_memory = None;
+        outcome.samples.clear();
+        outcome.elapsed = Duration::from_millis(12);
+        let rendered = render(&outcome);
+        let width = rendered.lines().next().unwrap().chars().count();
+        assert_eq!(width, MIN_INNER_WIDTH + 2);
     }
 
     #[test]
@@ -317,15 +480,25 @@ mod tests {
         // wrapped in │...│.
         assert!(rendered.contains("  exit     0"));
         assert!(rendered.contains("  elapsed  3.000s"));
+        // fixture has no mem_limit, so memory shows peak only (no parens).
         assert!(rendered.contains("  memory   max 4.0 MiB"));
+        assert!(!rendered.contains("  memory   max 4.0 MiB ("));
         // fixture has cpu_percent samples 12.5 and 25.0
         // -> avg 18.75 % = 0.19c, max 25.0 % = 0.25c
-        assert!(rendered.contains("  cpu      avg 0.19c, max 0.25c"));
+        assert!(rendered.contains("  cpu      avg 0.19c (18.8%), max 0.25c (25.0%)"));
         // Old labels should not leak in.
         assert!(!rendered.contains("samples"));
         assert!(!rendered.contains("bytes"));
         assert!(!rendered.contains("runtime"));
-        assert!(!rendered.contains('%'));
+    }
+
+    #[test]
+    fn render_shows_memory_percent_of_limit_when_set() {
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.peak_memory = Some(26 * 1024 * 1024);
+        outcome.mem_limit_bytes = Some(256 * 1024 * 1024);
+        let rendered = render(&outcome);
+        assert!(rendered.contains("  memory   max 26.0 MiB (10.2%)"));
     }
 
     #[test]

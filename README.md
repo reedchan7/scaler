@@ -119,12 +119,12 @@ $ scaler run --cpu 0.5c -- echo hello > out.txt
 [best-effort] interactive: best_effort
 
 ── scaler ─────────────────────────────
-┌─────────── scaler summary ───────────┐
-│  exit     0                          │
-│  elapsed  0.029s                     │
-│  memory   max 432.0 KiB              │
-│  cpu      avg 0.00c, max 0.00c       │
-└──────────────────────────────────────┘
+┌─────────────── scaler summary ────────────────┐
+│  exit     0                                   │
+│  elapsed  1.845s                              │
+│  memory   max 26.4 MiB (10.3%)                │
+│  cpu      avg 0.19c (18.8%), max 0.25c (25.0%)│
+└───────────────────────────────────────────────┘
 
 $ cat out.txt
 hello

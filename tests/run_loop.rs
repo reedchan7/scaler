@@ -65,7 +65,7 @@ fn summary_renderer_includes_status_and_peak_memory() {
     assert!(rendered.contains("exit     0"));
     assert!(rendered.contains("elapsed  3.000s"));
     assert!(rendered.contains("memory   max 4.0 MiB"));
-    assert!(rendered.contains("cpu      avg 0.19c, max 0.25c"));
+    assert!(rendered.contains("cpu      avg 0.19c (18.8%), max 0.25c (25.0%)"));
 }
 
 #[test]
