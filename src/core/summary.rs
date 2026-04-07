@@ -128,19 +128,11 @@ fn is_enforced(level: CapabilityLevel) -> bool {
 }
 
 fn capability_value(level: CapabilityLevel) -> &'static str {
-    match level {
-        CapabilityLevel::Enforced => "enforced",
-        CapabilityLevel::BestEffort => "best-effort",
-        CapabilityLevel::Unavailable => "unavailable",
-    }
+    level.as_str()
 }
 
 fn build_backend_row(value: &str, level: CapabilityLevel) -> String {
-    let suffix = match level {
-        CapabilityLevel::Enforced => "  [enforced]",
-        CapabilityLevel::BestEffort => "  [best-effort]",
-        CapabilityLevel::Unavailable => "  [unavailable]",
-    };
+    let suffix = format!("  [{}]", level.as_str());
     format!(
         "{INDENT}{label:<CONTEXT_LABEL_WIDTH$}  {value}{suffix}",
         label = "backend"
@@ -876,7 +868,7 @@ mod tests {
         // Each capability row appears with the [best-effort] tag.
         assert!(rendered.contains("backend"));
         assert!(rendered.contains("macos_taskpolicy"));
-        assert!(rendered.contains("[best-effort]"));
+        assert!(rendered.contains("[best_effort]"));
         assert!(rendered.contains("cpu"));
         assert!(rendered.contains("memory"));
         assert!(rendered.contains("interactive"));
@@ -922,9 +914,9 @@ mod tests {
             .lines()
             .find(|line| line.contains("interactive"))
             .expect("expected an `interactive` row");
-        assert!(interactive_line.contains("best-effort"));
+        assert!(interactive_line.contains("best_effort"));
         // No bracketed tag on the facet row itself.
-        assert!(!interactive_line.contains("[best-effort]"));
+        assert!(!interactive_line.contains("[best_effort]"));
     }
 
     #[test]
