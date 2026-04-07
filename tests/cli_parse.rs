@@ -480,3 +480,70 @@ fn bare_invocation_is_a_usage_error() {
     assert!(Cli::try_parse_from(["scaler", "run"]).is_err());
     assert!(Cli::try_parse_from(["scaler", "run", "--"]).is_err());
 }
+
+#[test]
+fn top_level_help_includes_quick_examples_block() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Run any command with normalized CPU and memory limits.",
+        ))
+        .stdout(predicate::str::contains("Quick examples:"))
+        .stdout(predicate::str::contains(
+            "scaler --cpu 0.5c --mem 1g -- npm install",
+        ))
+        .stdout(predicate::str::contains("scaler doctor"));
+}
+
+#[test]
+fn run_subcommand_help_includes_examples_block() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains(
+            "scaler run --cpu 0.5c --mem 1g -- npm install",
+        ))
+        .stdout(predicate::str::contains("scaler --shell sh"))
+        .stdout(predicate::str::contains("scaler --monitor"));
+}
+
+#[test]
+fn run_subcommand_help_describes_each_flag() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CPU budget in logical cores"))
+        .stdout(predicate::str::contains(
+            "Memory budget in 1024-based units",
+        ))
+        .stdout(predicate::str::contains("Force PTY"))
+        .stdout(predicate::str::contains("inline script"));
+}
+
+#[test]
+fn doctor_subcommand_help_describes_output_contract() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deterministic capability report"));
+}
+
+#[test]
+fn version_subcommand_help_describes_target_triple() {
+    AssertCommand::cargo_bin("scaler")
+        .unwrap()
+        .args(["version", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("target triple"));
+}

@@ -2,8 +2,52 @@ use clap::{ArgAction, CommandFactory, Parser, error::ErrorKind};
 
 use crate::cli::values::{CpuLimit, MemoryLimit};
 
+/// Top-level long_about kept as a string constant so the derive macro
+/// stays readable. Pulled in via `long_about = CLI_LONG_ABOUT`.
+const CLI_LONG_ABOUT: &str = "\
+Run any command with normalized CPU and memory limits.
+
+scaler wraps a command with normalized resource flags and a transient \
+enforcement scope so heavy work runs gently and visibly instead of locking \
+up the host. On Linux it spawns the target inside a `systemd-run --user --scope` \
+unit with `CPUQuota=` and `MemoryMax=` set; on macOS it falls back to \
+`taskpolicy` for best-effort throttling.
+
+Quick examples:
+  scaler --cpu 0.5c --mem 1g -- npm install
+  scaler --shell sh -- 'find . -name \"*.log\" | xargs gzip'
+  scaler -- make build               (no limits, just record stats)
+  scaler doctor                      (check enforcement on this host)
+
+Run `scaler run --help` for the full flag reference.";
+
+const RUN_AFTER_LONG_HELP: &str = "\
+Examples:
+  # Half a core, 1 GiB memory; real cgroup v2 limits on Linux
+  scaler run --cpu 0.5c --mem 1g -- npm install
+
+  # Same thing, shorthand (the `run` is implicit when `--` is present)
+  scaler --cpu 0.5c --mem 1g -- npm install
+
+  # Inline shell script — must be exactly one quoted token after `--`
+  scaler --shell sh -- 'find . -name \"*.log\" | xargs gzip'
+
+  # No limits, just record elapsed / peak memory / CPU usage
+  scaler -- make build
+
+  # Live TUI dashboard for long-running jobs
+  scaler --monitor --cpu 2c -- cargo build --release
+
+See `scaler doctor` to check what limits your host can actually enforce.";
+
 #[derive(Parser, Debug)]
-#[command(name = "scaler", version)]
+#[command(
+    name = "scaler",
+    version,
+    about = "Run any command with normalized CPU and memory limits.",
+    long_about = CLI_LONG_ABOUT,
+    after_help = "See `scaler doctor` to check what limits your host can actually enforce.",
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -25,28 +69,58 @@ pub enum ShellArg {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Run a command under scaler with optional CPU and memory limits.
     Run(RunCommand),
+
+    /// Print a deterministic capability report for the current host.
+    #[command(long_about = "\
+Print a deterministic capability report for the current host. Output line \
+ordering is stable: capability lines first (`platform`, `backend`, `backend_state`, \
+`cpu`, `memory`, `interactive`, `effective_backend`), then prerequisite lines \
+in their declared order, then warning lines sorted alphabetically. Use this \
+to confirm whether `scaler run --cpu` and `--mem` will be enforced or merely \
+best-effort on this host.")]
     Doctor,
+
+    /// Print scaler version with target triple.
+    #[command(long_about = "\
+Print the scaler version and the OS/architecture target triple this binary \
+was built for, e.g. `scaler 0.4.0 macos-aarch64`. Useful when filing bug \
+reports.")]
     Version,
 }
 
 #[derive(clap::Args, Debug)]
+#[command(
+    after_help = "See `scaler run --help` for usage examples.",
+    after_long_help = RUN_AFTER_LONG_HELP,
+)]
 pub struct RunCommand {
+    /// CPU budget in logical cores: `1c`, `0.5c`, `0.25c`. Minimum `0.01c`.
+    /// On Linux this maps to `CPUQuota=`. On macOS it lowers scheduling
+    /// priority via `taskpolicy` (best-effort, not a hard cap).
     #[arg(long, value_parser = crate::cli::values::parse_cpu_limit)]
     pub cpu: Option<CpuLimit>,
 
+    /// Memory budget in 1024-based units: `1g`, `512m`, `1.5g`. Minimum `1m`.
+    /// On Linux this maps to `MemoryMax=` plus `MemoryHigh=` at 90 % plus
+    /// `MemorySwapMax=0`. On macOS it is best-effort (`taskpolicy -m <mib>`
+    /// when supported).
     #[arg(long, value_parser = crate::cli::values::parse_memory_limit)]
     pub mem: Option<MemoryLimit>,
 
+    /// Force PTY (`always`) or pipe (`never`) IO mode. `auto` (the default)
+    /// picks PTY only when stdin/stdout/stderr are all terminals.
     #[arg(long, value_enum, default_value_t = InteractiveModeArg::Auto)]
     pub interactive: InteractiveModeArg,
 
+    /// Wrap a single inline script with the chosen shell. Requires exactly
+    /// one quoted token after `--`.
     #[arg(long, value_enum)]
     pub shell: Option<ShellArg>,
 
-    /// Enable the live TUI dashboard (opt-in). Without this flag,
-    /// `scaler run` streams output in plain mode and prints the summary
-    /// card at the end — no alt-screen flash for short commands.
+    /// Enable the live TUI dashboard (opt-in). Without this flag, scaler
+    /// streams command output plainly and prints the summary card at the end.
     #[arg(long = "monitor", default_value_t = false, action = ArgAction::SetTrue)]
     pub monitor: bool,
 
