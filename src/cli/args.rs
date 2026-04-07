@@ -44,7 +44,10 @@ pub struct RunCommand {
     #[arg(long, value_enum)]
     pub shell: Option<ShellArg>,
 
-    #[arg(long = "no-monitor", default_value_t = true, action = ArgAction::SetFalse)]
+    /// Enable the live TUI dashboard (opt-in). Without this flag,
+    /// `scaler run` streams output in plain mode and prints the summary
+    /// card at the end — no alt-screen flash for short commands.
+    #[arg(long = "monitor", default_value_t = false, action = ArgAction::SetTrue)]
     pub monitor: bool,
 
     #[arg(last = true)]

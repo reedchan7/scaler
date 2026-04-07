@@ -83,6 +83,11 @@ fn plain_fallback_executes_real_command_and_collects_output_frames() {
             ],
             resource_spec: ResourceSpec {
                 interactive: InteractiveMode::Never,
+                // Explicit opt-in so the "monitor requested but can't
+                // activate" fallback path is exercised — the default
+                // became `false` in 0.4.x to avoid the TUI alt-screen
+                // flash on short commands.
+                monitor: true,
                 ..ResourceSpec::default()
             },
             platform: host_platform(),

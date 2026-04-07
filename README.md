@@ -73,7 +73,7 @@ scaler [FLAGS] -- <program> [args...]
 | `--mem` | `1g`, `512m`, `1.5g` | Memory budget. Units: `b k m g t` (1024-based). Minimum `1m`. |
 | `--interactive` | `auto` (default), `always`, `never` | Force PTY or pipe mode. `auto` picks PTY only when stdin/stdout/stderr are all terminals. |
 | `--shell` | `sh`, `bash`, `zsh` | Wrap a single inline script with the chosen shell. |
-| `--no-monitor` | — | Disable the live TUI dashboard. |
+| `--monitor` | — | Opt in to the live TUI dashboard (default: plain streaming). |
 
 ### Examples
 
@@ -205,7 +205,8 @@ CI runs `cargo fmt -- --check`, `cargo clippy --tests -- -D warnings`, `cargo te
 ## Limitations
 
 - macOS limits are **best-effort only** — `taskpolicy` lowers scheduling priority but cannot hard-cap CPU or memory. `scaler doctor` reports this honestly so you don't get a false sense of safety.
-- TUI mode buffers child output to a 64 KiB tail; for full streaming of long-running jobs, pass `--no-monitor` or pipe through a non-TTY.
+- The live TUI dashboard is **opt-in**: pass `--monitor` for a ratatui-based card that shows CPU / memory / elapsed in real time. Without it, scaler streams the command output plainly and prints the summary card at the end.
+- When `--monitor` is active, the TUI buffers child output to a 64 KiB tail per stream; for full streaming of long-running jobs, just omit `--monitor`.
 - Windows is not supported.
 
 ## License

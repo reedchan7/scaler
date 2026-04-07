@@ -161,7 +161,7 @@ impl Default for ResourceSpec {
             mem: None,
             interactive: InteractiveMode::Auto,
             shell: None,
-            monitor: true,
+            monitor: false,
         }
     }
 }
@@ -241,5 +241,9 @@ pub struct RunOutcome {
     /// Memory cap requested via `--mem`, in bytes. Used by the summary
     /// to show peak usage as a percent of the user's own budget.
     pub mem_limit_bytes: Option<u64>,
+    /// Host physical memory in bytes. Used by the summary as a fallback
+    /// denominator when `--mem` was not supplied, so the memory row
+    /// still has a meaningful percentage attached.
+    pub system_memory_bytes: Option<u64>,
     pub samples: Vec<SummarySample>,
 }

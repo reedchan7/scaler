@@ -216,14 +216,14 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
-            OsString::from("--no-monitor=false"),
+            OsString::from("--monitor=false"),
             OsString::from("--"),
             OsString::from("echo"),
         ]),
         vec![
             OsString::from("scaler"),
             OsString::from("run"),
-            OsString::from("--no-monitor=false"),
+            OsString::from("--monitor=false"),
             OsString::from("--"),
             OsString::from("echo"),
         ]
@@ -231,14 +231,14 @@ fn normalize_argv_only_rewrites_supported_run_shorthand_forms() {
     assert_eq!(
         normalize_argv(vec![
             OsString::from("scaler"),
-            OsString::from("--no-monitor"),
+            OsString::from("--monitor"),
             OsString::from("--"),
             OsString::from("echo"),
         ]),
         vec![
             OsString::from("scaler"),
             OsString::from("run"),
-            OsString::from("--no-monitor"),
+            OsString::from("--monitor"),
             OsString::from("--"),
             OsString::from("echo"),
         ]
@@ -400,7 +400,7 @@ fn parses_interactive_and_monitor_flags() {
         "run",
         "--interactive",
         "never",
-        "--no-monitor",
+        "--monitor",
         "--",
         "echo",
         "ok",

@@ -23,7 +23,7 @@ pub fn render(outcome: &RunOutcome) -> String {
     if let Some(peak) = outcome.peak_memory {
         body.push(build_row(
             "memory",
-            &format_memory(peak, outcome.mem_limit_bytes),
+            &format_memory(peak, outcome.mem_limit_bytes, outcome.system_memory_bytes),
         ));
     }
     if let Some(stats) = cpu_stats(&outcome.samples) {
@@ -77,20 +77,30 @@ fn render_footer(inner_width: usize) -> String {
     format!("└{}┘", "─".repeat(inner_width))
 }
 
-/// Memory row value. Without a `--mem` limit we just show the peak in
-/// human units: `max 26.4 MiB`. With a limit we append the peak as a
-/// percent of that limit so the user can see how close the process got
-/// to their own budget: `max 26.4 MiB (10.3%)`. The percent is suppressed
-/// if the limit is zero (which `clap` would reject anyway).
-fn format_memory(peak: u64, limit: Option<u64>) -> String {
+/// Memory row value. The peak is always shown in human units. The
+/// parenthesized percent uses the tightest relevant denominator:
+///
+///   1. If the user passed `--mem N`, percent is relative to N.
+///      `max 26.4 MiB (10.3% of 256.0 MiB)`
+///   2. Otherwise, if we know the host's physical memory, percent is
+///      relative to that.
+///      `max 26.4 MiB (0.4% of 16.0 GiB)`
+///   3. If neither is available, we fall back to the peak alone.
+///      `max 26.4 MiB`
+///
+/// Zero denominators are treated as "unknown" so a defensive
+/// `Some(0)` never causes a divide-by-zero.
+fn format_memory(peak: u64, limit: Option<u64>, system_total: Option<u64>) -> String {
     let head = format!("max {}", format_bytes(peak));
-    match limit {
-        Some(limit_bytes) if limit_bytes > 0 => {
-            let percent = (peak as f64 / limit_bytes as f64) * 100.0;
-            format!("{head} ({percent:.1}%)")
-        }
-        _ => head,
+    if let Some(limit_bytes) = limit.filter(|&n| n > 0) {
+        let percent = (peak as f64 / limit_bytes as f64) * 100.0;
+        return format!("{head} ({percent:.1}% of {})", format_bytes(limit_bytes));
     }
+    if let Some(total_bytes) = system_total.filter(|&n| n > 0) {
+        let percent = (peak as f64 / total_bytes as f64) * 100.0;
+        return format!("{head} ({percent:.1}% of {})", format_bytes(total_bytes));
+    }
+    head
 }
 
 /// `avg <Nc> (<P %>), max <Nc> (<P %>)` — cores first, then the raw
@@ -198,6 +208,7 @@ impl RunOutcome {
             elapsed: Duration::from_secs(3),
             peak_memory: Some(4_194_304),
             mem_limit_bytes: None,
+            system_memory_bytes: None,
             samples: vec![
                 SummarySample {
                     captured_at: SystemTime::UNIX_EPOCH,
@@ -248,37 +259,60 @@ mod tests {
     }
 
     #[test]
-    fn format_memory_without_limit_shows_only_human_peak() {
-        assert_eq!(format_memory(4_194_304, None), "max 4.0 MiB");
-        assert_eq!(format_memory(512, None), "max 512 B");
-        assert_eq!(format_memory(1_610_612_736, None), "max 1.5 GiB");
+    fn format_memory_with_neither_limit_nor_host_shows_peak_only() {
+        assert_eq!(format_memory(4_194_304, None, None), "max 4.0 MiB");
+        assert_eq!(format_memory(512, None, None), "max 512 B");
+        assert_eq!(format_memory(1_610_612_736, None, None), "max 1.5 GiB");
     }
 
     #[test]
     fn format_memory_with_limit_shows_percent_of_limit() {
         // Peak 26 MiB of a 256 MiB budget -> about 10.2 %.
         assert_eq!(
-            format_memory(26 * 1024 * 1024, Some(256 * 1024 * 1024)),
-            "max 26.0 MiB (10.2%)"
+            format_memory(
+                26 * 1024 * 1024,
+                Some(256 * 1024 * 1024),
+                // Host total should be ignored once a --mem limit is
+                // present, so pick a value that would give a wildly
+                // different percentage if it were used by mistake.
+                Some(16 * 1024 * 1024 * 1024),
+            ),
+            "max 26.0 MiB (10.2% of 256.0 MiB)"
         );
         // Peak exactly equal to the limit.
         assert_eq!(
-            format_memory(64 * 1024 * 1024, Some(64 * 1024 * 1024)),
-            "max 64.0 MiB (100.0%)"
+            format_memory(64 * 1024 * 1024, Some(64 * 1024 * 1024), None),
+            "max 64.0 MiB (100.0% of 64.0 MiB)"
         );
         // Over-limit: sampler can catch the process after it overshot
-        // MemoryMax but before it was OOM-killed.
+        // MemoryMax but before the cgroup killed it.
         assert_eq!(
-            format_memory(70 * 1024 * 1024, Some(64 * 1024 * 1024)),
-            "max 70.0 MiB (109.4%)"
+            format_memory(70 * 1024 * 1024, Some(64 * 1024 * 1024), None),
+            "max 70.0 MiB (109.4% of 64.0 MiB)"
         );
     }
 
     #[test]
-    fn format_memory_treats_zero_limit_as_no_limit() {
+    fn format_memory_without_limit_falls_back_to_percent_of_host() {
+        // 26 MiB of a 16 GiB host -> ~0.16 %.
+        assert_eq!(
+            format_memory(26 * 1024 * 1024, None, Some(16 * 1024 * 1024 * 1024)),
+            "max 26.0 MiB (0.2% of 16.0 GiB)"
+        );
+        // A process using a third of the host memory.
+        assert_eq!(
+            format_memory(2 * 1024 * 1024 * 1024, None, Some(6 * 1024 * 1024 * 1024),),
+            "max 2.0 GiB (33.3% of 6.0 GiB)"
+        );
+    }
+
+    #[test]
+    fn format_memory_treats_zero_denominators_as_unknown() {
         // `clap` would reject --mem 0 at parse time, but the formatter
-        // should not divide by zero if we ever get here by accident.
-        assert_eq!(format_memory(4_194_304, Some(0)), "max 4.0 MiB");
+        // should still not divide by zero if we ever get here by accident.
+        assert_eq!(format_memory(4_194_304, Some(0), None), "max 4.0 MiB");
+        // Same for a broken host probe that returns Some(0).
+        assert_eq!(format_memory(4_194_304, None, Some(0)), "max 4.0 MiB");
     }
 
     #[test]
@@ -498,7 +532,17 @@ mod tests {
         outcome.peak_memory = Some(26 * 1024 * 1024);
         outcome.mem_limit_bytes = Some(256 * 1024 * 1024);
         let rendered = render(&outcome);
-        assert!(rendered.contains("  memory   max 26.0 MiB (10.2%)"));
+        assert!(rendered.contains("  memory   max 26.0 MiB (10.2% of 256.0 MiB)"));
+    }
+
+    #[test]
+    fn render_shows_memory_percent_of_host_when_no_limit() {
+        let mut outcome = RunOutcome::fixture_for_test();
+        outcome.peak_memory = Some(26 * 1024 * 1024);
+        outcome.mem_limit_bytes = None;
+        outcome.system_memory_bytes = Some(16 * 1024 * 1024 * 1024);
+        let rendered = render(&outcome);
+        assert!(rendered.contains("  memory   max 26.0 MiB (0.2% of 16.0 GiB)"));
     }
 
     #[test]

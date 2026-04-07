@@ -269,6 +269,7 @@ pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOut
                 elapsed: runtime_since(started_at),
                 peak_memory,
                 mem_limit_bytes: plan.resource_spec.mem.map(|limit| limit.bytes()),
+                system_memory_bytes: crate::core::system_memory::total_memory_bytes(),
                 samples,
             };
             // Summary goes to stderr so user pipelines like

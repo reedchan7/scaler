@@ -27,7 +27,7 @@ fn is_run_shorthand_flag(value: &OsStr) -> bool {
         || matches_flag(&value, "--mem")
         || matches_flag(&value, "--interactive")
         || matches_flag(&value, "--shell")
-        || matches_flag(&value, "--no-monitor")
+        || matches_flag(&value, "--monitor")
 }
 
 fn has_delimiter(values: &[OsString]) -> bool {
