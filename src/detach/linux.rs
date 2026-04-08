@@ -20,9 +20,7 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 use crate::core::LaunchPlan;
 use crate::detach::id::RunId;
-use crate::detach::state::{
-    Meta, RunResult, RunState, StateRoot, read_meta, write_meta, write_result,
-};
+use crate::detach::state::{Meta, RunResult, RunState, StateRoot, write_meta, write_result};
 
 /// Build the argv vector for `systemd-run` in detach mode.
 ///
@@ -237,11 +235,6 @@ pub fn finalize_with_env(
     show_output: Option<&str>,
 ) -> Result<()> {
     let id = RunId::parse(run_id).ok_or_else(|| anyhow::anyhow!("invalid run id: {run_id}"))?;
-
-    // Sanity check: meta.json should exist for this id. If not, the
-    // finalize hook was called for a run we don't know about — still
-    // try to write result.json so the run shows up in status.
-    let _ = read_meta(root, &id);
 
     let exit_code_label = env.get("EXIT_CODE").map(String::as_str).unwrap_or("");
     let exit_status = env.get("EXIT_STATUS").and_then(|s| s.parse::<i32>().ok());

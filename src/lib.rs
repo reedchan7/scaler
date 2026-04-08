@@ -60,7 +60,9 @@ pub fn run() -> anyhow::Result<()> {
         crate::cli::args::Command::Finalize { id } => {
             #[cfg(target_os = "linux")]
             {
-                crate::detach::linux::finalize(&id)?;
+                if let Err(e) = crate::detach::linux::finalize(&id) {
+                    eprintln!("scaler __finalize: {e:#}");
+                }
                 return Ok(());
             }
             #[cfg(not(target_os = "linux"))]
