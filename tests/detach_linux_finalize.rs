@@ -59,7 +59,8 @@ fn finalize_writes_killed_result_from_env() {
     let mut env = HashMap::new();
     env.insert("SERVICE_RESULT".to_string(), "signal".to_string());
     env.insert("EXIT_CODE".to_string(), "killed".to_string());
-    env.insert("EXIT_STATUS".to_string(), "9".to_string());
+    // systemd ExecStopPost passes the signal NAME (no SIG prefix) here, not a number.
+    env.insert("EXIT_STATUS".to_string(), "KILL".to_string());
 
     finalize_with_env(&root, id.as_str(), &env, None).unwrap();
 
@@ -67,6 +68,28 @@ fn finalize_writes_killed_result_from_env() {
     assert!(matches!(result.state, RunState::Killed));
     assert_eq!(result.signal.as_deref(), Some("SIGKILL"));
     assert_eq!(result.exit_code, Some(128 + 9));
+}
+
+#[test]
+fn finalize_writes_killed_with_sigterm_from_systemctl_stop() {
+    // Reproduces what `systemctl --user stop scaler-run-<id>.service` produces:
+    // EXIT_CODE=killed, EXIT_STATUS=TERM (signal name without SIG prefix).
+    let tmp = TempDir::new().unwrap();
+    let root = StateRoot::with_base(tmp.path().to_path_buf());
+    let id = RunId::parse("20260408-143022-a1b2").unwrap();
+    write_meta(&root, &id, &fixture_meta(&id)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("SERVICE_RESULT".to_string(), "success".to_string());
+    env.insert("EXIT_CODE".to_string(), "killed".to_string());
+    env.insert("EXIT_STATUS".to_string(), "TERM".to_string());
+
+    finalize_with_env(&root, id.as_str(), &env, None).unwrap();
+
+    let result = read_result(&root, &id).unwrap();
+    assert!(matches!(result.state, RunState::Killed));
+    assert_eq!(result.signal.as_deref(), Some("SIGTERM"));
+    assert_eq!(result.exit_code, Some(143));
 }
 
 #[test]

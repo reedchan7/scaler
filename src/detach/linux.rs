@@ -241,19 +241,29 @@ pub fn finalize_with_env(
     let id = RunId::parse(run_id).ok_or_else(|| anyhow::anyhow!("invalid run id: {run_id}"))?;
 
     let exit_code_label = env.get("EXIT_CODE").map(String::as_str).unwrap_or("");
-    let exit_status = env.get("EXIT_STATUS").and_then(|s| s.parse::<i32>().ok());
+    let exit_status_raw = env.get("EXIT_STATUS").map(String::as_str).unwrap_or("");
 
+    // systemd ExecStopPost env semantics (per `man systemd.service`):
+    //   EXIT_CODE=exited  => EXIT_STATUS is the numeric exit code (e.g. "0", "42")
+    //   EXIT_CODE=killed  => EXIT_STATUS is the signal NAME without SIG prefix (e.g. "TERM")
+    //   EXIT_CODE=dumped  => EXIT_STATUS is the signal NAME without SIG prefix
     let (state, exit_code, signal) = match exit_code_label {
-        "exited" => (RunState::Exited, exit_status, None),
-        "killed" | "dumped" => {
-            let sig = exit_status.unwrap_or(0);
-            (
-                RunState::Killed,
-                Some(128 + sig),
-                Some(signal_name(sig).unwrap_or("signal").to_string()),
-            )
+        "exited" => {
+            let code = exit_status_raw.parse::<i32>().ok();
+            (RunState::Exited, code, None)
         }
-        _ => (RunState::LaunchFailed, exit_status, None),
+        "killed" | "dumped" => {
+            // exit_status_raw is a signal name like "TERM" — prefix with "SIG"
+            // and look up the number for the 128+sig exit code convention.
+            let sig_name = if exit_status_raw.is_empty() {
+                "signal".to_string()
+            } else {
+                format!("SIG{exit_status_raw}")
+            };
+            let exit_code = signal_number(&sig_name).map(|n| 128 + n);
+            (RunState::Killed, exit_code, Some(sig_name))
+        }
+        _ => (RunState::LaunchFailed, None, None),
     };
 
     let (cpu_total_nanos, memory_peak_bytes) = parse_show_metrics(show_output);
@@ -310,16 +320,16 @@ fn parse_show_metrics(show: Option<&str>) -> (Option<u128>, Option<u64>) {
     (cpu, mem)
 }
 
-fn signal_name(signum: i32) -> Option<&'static str> {
-    Some(match signum {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        6 => "SIGABRT",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        15 => "SIGTERM",
+fn signal_number(sig_name: &str) -> Option<i32> {
+    Some(match sig_name {
+        "SIGHUP" => 1,
+        "SIGINT" => 2,
+        "SIGQUIT" => 3,
+        "SIGABRT" => 6,
+        "SIGKILL" => 9,
+        "SIGSEGV" => 11,
+        "SIGPIPE" => 13,
+        "SIGTERM" => 15,
         _ => return None,
     })
 }
