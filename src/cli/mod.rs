@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::ffi::{OsStr, OsString};
 
 pub mod args;
+pub mod status;
 pub mod values;
 
 pub use args::Cli;
