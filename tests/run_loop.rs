@@ -12,7 +12,7 @@ use scaler::core::{
     InteractiveMode, LaunchPlan, OutputStream, Platform, ResourceSpec, RunOutcome,
     output::{OutputCollector, next_sequence},
     run_loop::{
-        PlainFallbackBackend, execute, plain_fallback_command_preview_for_test,
+        PlainFallbackBackend, execute, execute_headless, plain_fallback_command_preview_for_test,
         record_interactive_mode_for_test, record_monitor_fallback_for_test,
         record_post_launch_monitor_failure_for_test, record_summary_timeline_for_test,
         record_ui_mode_for_test, reset_test_state, set_test_monitor_fail_after_launch_for_next_run,
@@ -372,6 +372,38 @@ fn monitor_failure_after_launch_restores_terminal_and_keeps_output_flowing() {
         record_post_launch_monitor_failure_for_test(),
         vec!["monitor_failed", "plain_renderer_continues"]
     );
+    assert_eq!(
+        record_summary_timeline_for_test(),
+        vec!["launch", "restore_terminal", "render_summary"]
+    );
+}
+
+#[test]
+fn execute_headless_runs_to_completion_without_panic() {
+    let _guard = test_guard();
+    reset_test_state();
+    set_test_poll_interval_for_next_run(Duration::from_millis(10));
+
+    let outcome = execute_headless(
+        LaunchPlan {
+            argv: vec![
+                OsString::from("/bin/sh"),
+                OsString::from("-c"),
+                OsString::from("exit 0"),
+            ],
+            resource_spec: ResourceSpec {
+                interactive: InteractiveMode::Never,
+                monitor: false,
+                ..ResourceSpec::default()
+            },
+            platform: host_platform(),
+        },
+        &PlainFallbackBackend,
+    )
+    .expect("execute_headless must succeed");
+
+    assert_eq!(outcome.exit_status.code(), Some(0));
+    // render_summary event is recorded but no output is produced
     assert_eq!(
         record_summary_timeline_for_test(),
         vec!["launch", "restore_terminal", "render_summary"]

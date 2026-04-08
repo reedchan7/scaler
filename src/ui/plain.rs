@@ -44,6 +44,33 @@ impl Renderer for PlainRenderer {
     }
 }
 
+/// Renderer that accepts frames and snapshots and does nothing. Used by
+/// `core::run_loop::execute_headless` for detached runs where stdout has
+/// been redirected to a log file by the caller before the run loop starts;
+/// printing the summary card would corrupt that captured output.
+#[derive(Debug, Default)]
+pub struct NoopRenderer;
+
+impl NoopRenderer {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Renderer for NoopRenderer {
+    fn render_frame(&mut self, _frame: &OutputFrame) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn render_snapshot(&mut self, _snapshot: &MonitorSnapshot) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
