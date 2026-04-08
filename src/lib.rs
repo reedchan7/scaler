@@ -32,7 +32,20 @@ pub fn run() -> anyhow::Result<()> {
             Ok(())
         }
         crate::cli::args::Command::Run(run) => {
+            // Extract the detach flag before consuming `run` into build_launch_plan.
+            let is_detach = run.detach;
             let plan = build_launch_plan(run);
+
+            // SAFETY: the --detach path double-forks on macOS, which requires
+            // a single-threaded process. We must branch HERE, before calling
+            // install_signal_bridge() which spawns a ctrlc handler thread.
+            if is_detach {
+                let id = crate::detach::launch(&plan)?;
+                println!("{}", id.as_str());
+                return Ok(());
+            }
+
+            // Foreground path: install signal bridge, select backend, execute.
             let effective = crate::backend::effective_backend_kind();
             warn_if_resource_limits_will_be_dropped(&plan, effective);
             let backend = crate::backend::select_backend();
@@ -54,9 +67,7 @@ pub fn run() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        crate::cli::args::Command::Status(_) => {
-            anyhow::bail!("`scaler status` not wired yet (Task 11)");
-        }
+        crate::cli::args::Command::Status(status) => dispatch_status(status),
         crate::cli::args::Command::Finalize { id } => {
             #[cfg(target_os = "linux")]
             {
@@ -123,6 +134,31 @@ fn warn_if_resource_limits_will_be_dropped(
             "scaler: resource limits NOT being enforced on this host; run `scaler doctor` for details"
         );
     }
+}
+
+fn dispatch_status(cmd: crate::cli::args::StatusCommand) -> anyhow::Result<()> {
+    let root = crate::detach::state::StateRoot::from_env()?;
+    let mut stdout = std::io::stdout().lock();
+    match cmd.id {
+        None => {
+            let views = crate::detach::query_all(&root)?;
+            crate::cli::status::render_list(&mut stdout, &views, cmd.json)?;
+        }
+        Some(needle) => {
+            let ids = crate::detach::state::list_run_ids(&root)?;
+            let id = crate::detach::id::RunId::find_by_prefix(&needle, &ids)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "not found: no run matches {:?} (use exact id or unique prefix)",
+                        needle
+                    )
+                })?
+                .clone();
+            let view = crate::detach::query_one(&root, &id)?;
+            crate::cli::status::render_detail(&mut stdout, &view, cmd.json)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolved_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
