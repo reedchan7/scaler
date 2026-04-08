@@ -19,18 +19,8 @@ use crate::{
         InteractiveMode, IoMode, LaunchPlan, OutputFrame, OutputStream, RunOutcome, RunningHandle,
         Sample, ShellKind, Signal, SummarySample, output::OutputCollector,
     },
-    ui::{
-        self, MonitorSnapshot, Renderer as _, UiContext,
-        plain::{NoopRenderer, PlainRenderer},
-        tui::TuiRenderer,
-    },
+    ui::{self, MonitorSnapshot, Renderer as _, UiContext, plain::PlainRenderer, tui::TuiRenderer},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UiMode {
-    Foreground,
-    Headless,
-}
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 const CONTROL_INTERVAL_CAP: Duration = Duration::from_millis(10);
@@ -91,7 +81,6 @@ struct SelectedExecution {
 enum ActiveUi {
     Plain(PlainRenderer),
     Tui(Box<TuiRenderer>),
-    Noop(NoopRenderer),
 }
 
 impl ActiveUi {
@@ -99,7 +88,6 @@ impl ActiveUi {
         match self {
             Self::Plain(renderer) => renderer.render_frame(frame),
             Self::Tui(renderer) => renderer.render_frame(frame),
-            Self::Noop(renderer) => renderer.render_frame(frame),
         }
     }
 
@@ -107,7 +95,6 @@ impl ActiveUi {
         match self {
             Self::Plain(renderer) => renderer.render_snapshot(snapshot),
             Self::Tui(renderer) => renderer.render_snapshot(snapshot),
-            Self::Noop(renderer) => renderer.render_snapshot(snapshot),
         }
     }
 
@@ -115,7 +102,6 @@ impl ActiveUi {
         match self {
             Self::Plain(renderer) => renderer.finish(),
             Self::Tui(renderer) => renderer.finish(),
-            Self::Noop(renderer) => renderer.finish(),
         }
     }
 
@@ -185,20 +171,6 @@ impl UiSession {
         })
     }
 
-    fn headless(plan: &LaunchPlan) -> Self {
-        let base_context = UiContext {
-            command: display_command(plan),
-            capabilities: crate::core::CapabilityReport::unsupported(),
-            compact: false,
-            warnings: vec![],
-        };
-        Self {
-            renderer: ActiveUi::Noop(NoopRenderer::new()),
-            base_context,
-            restored: false,
-        }
-    }
-
     fn render_frame(
         &mut self,
         frame: &OutputFrame,
@@ -256,25 +228,51 @@ impl UiSession {
     }
 }
 
-pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
-    execute_with_ui_mode(plan, backend, UiMode::Foreground)
-}
-
-/// Run the command to completion with no UI rendering and no final summary
-/// card. Used by detached mode (currently only macOS via the forked
+/// Run the command to completion with inherited stdio and no UI rendering or
+/// summary card. Used by detached mode (currently only macOS via the forked
 /// grandchild — Linux detach bypasses this and lets systemd supervise the
-/// transient unit). The caller is responsible for redirecting stdio to log
-/// files BEFORE invoking this function; child output is otherwise captured
-/// only via the OutputCollector and discarded by NoopRenderer.
-pub fn execute_headless(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
-    execute_with_ui_mode(plan, backend, UiMode::Headless)
+/// transient unit). The caller must redirect the grandchild's own fd 1/2 to
+/// log files BEFORE invoking this function; `Stdio::inherit()` on the child
+/// then propagates those fds so the child writes directly to the log files.
+pub fn execute_headless(plan: LaunchPlan, _backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
+    anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
+
+    clear_execution_trace();
+    let wall_start = std::time::Instant::now();
+
+    let mut cmd = Command::new(&plan.argv[0]);
+    cmd.args(&plan.argv[1..]);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    record_event("launch");
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", &plan.argv[0]))?;
+    let exit_status = child.wait().context("failed to wait for child process")?;
+    record_event("restore_terminal");
+
+    let capabilities = crate::core::CapabilityReport::unsupported();
+    let outcome = RunOutcome {
+        exit_status,
+        elapsed: wall_start.elapsed(),
+        peak_memory: None,
+        mem_limit_bytes: plan.resource_spec.mem.map(|l| l.bytes()),
+        system_memory_bytes: None,
+        samples: vec![],
+        cpu_limit_centi_cores: plan.resource_spec.cpu.map(|l| l.centi_cores()),
+        host_logical_cores: None,
+        capabilities,
+        warnings: vec![],
+        total_cpu_nanos: None,
+    };
+    record_event("render_summary");
+    clear_runtime_overrides();
+    Ok(outcome)
 }
 
-fn execute_with_ui_mode(
-    plan: LaunchPlan,
-    backend: &dyn Backend,
-    mode: UiMode,
-) -> anyhow::Result<RunOutcome> {
+pub fn execute(plan: LaunchPlan, backend: &dyn Backend) -> anyhow::Result<RunOutcome> {
     anyhow::ensure!(!plan.argv.is_empty(), "launch plan argv must not be empty");
 
     clear_execution_trace();
@@ -284,10 +282,7 @@ fn execute_with_ui_mode(
     record_event("launch");
     let mut handle = backend.launch(&selection.plan)?;
     record_event("launch_complete");
-    let mut ui = match mode {
-        UiMode::Foreground => UiSession::start(&selection, capabilities.clone(), &mut warnings)?,
-        UiMode::Headless => UiSession::headless(&plan),
-    };
+    let mut ui = UiSession::start(&selection, capabilities.clone(), &mut warnings)?;
     record_event("interactive_mode_selected");
     match selection.io_mode {
         IoMode::Pipes => record_event("pipe_streams"),
@@ -340,15 +335,13 @@ fn execute_with_ui_mode(
                 // dedicated backend method; for now it is None everywhere.
                 total_cpu_nanos: None,
             };
-            if mode == UiMode::Foreground {
-                // Summary goes to stderr so user pipelines like
-                //   scaler run -- jq < x.json > out.json
-                // keep `out.json` clean of scaler's metadata. The leading blank
-                // line gives a clear visual break from the child output; the
-                // top + bottom box-drawing rule lives inside summary::render.
-                eprintln!();
-                eprintln!("{}", crate::core::summary::render(&outcome));
-            }
+            // Summary goes to stderr so user pipelines like
+            //   scaler run -- jq < x.json > out.json
+            // keep `out.json` clean of scaler's metadata. The leading blank
+            // line gives a clear visual break from the child output; the
+            // top + bottom box-drawing rule lives inside summary::render.
+            eprintln!();
+            eprintln!("{}", crate::core::summary::render(&outcome));
             record_event("render_summary");
             clear_runtime_overrides();
 
