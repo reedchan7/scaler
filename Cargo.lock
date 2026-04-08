@@ -1043,6 +1043,7 @@ dependencies = [
  "clap",
  "crossterm",
  "ctrlc",
+ "libc",
  "predicates",
  "ratatui",
  "rust_decimal",

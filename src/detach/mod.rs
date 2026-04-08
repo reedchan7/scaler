@@ -33,8 +33,8 @@ fn platform_launch(plan: &LaunchPlan, root: &StateRoot) -> Result<RunId> {
 }
 
 #[cfg(target_os = "macos")]
-fn platform_launch(_plan: &LaunchPlan, _root: &StateRoot) -> Result<RunId> {
-    anyhow::bail!("macOS detach not yet implemented (Task 9)")
+fn platform_launch(plan: &LaunchPlan, root: &StateRoot) -> Result<RunId> {
+    macos::launch(plan, root)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -61,13 +61,13 @@ fn platform_query_all(root: &StateRoot) -> Result<Vec<crate::cli::status::RunVie
 }
 
 #[cfg(target_os = "macos")]
-fn platform_query_one(_root: &StateRoot, _id: &RunId) -> Result<crate::cli::status::RunView> {
-    anyhow::bail!("macOS status query not yet implemented (Task 9)")
+fn platform_query_one(root: &StateRoot, id: &RunId) -> Result<crate::cli::status::RunView> {
+    macos::query_one(root, id)
 }
 
 #[cfg(target_os = "macos")]
-fn platform_query_all(_root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
-    anyhow::bail!("macOS status query not yet implemented (Task 9)")
+fn platform_query_all(root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
+    macos::query_all(root)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
