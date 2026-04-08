@@ -74,7 +74,7 @@ pub fn run() -> anyhow::Result<()> {
                 if let Err(e) = crate::detach::linux::finalize(&id) {
                     eprintln!("scaler __finalize: {e:#}");
                 }
-                return Ok(());
+                Ok(())
             }
             #[cfg(not(target_os = "linux"))]
             {
