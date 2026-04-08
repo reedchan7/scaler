@@ -11,6 +11,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Command;
 
@@ -19,7 +20,9 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 use crate::core::LaunchPlan;
 use crate::detach::id::RunId;
-use crate::detach::state::{Meta, StateRoot, write_meta};
+use crate::detach::state::{
+    Meta, RunResult, RunState, StateRoot, read_meta, write_meta, write_result,
+};
 
 /// Build the argv vector for `systemd-run` in detach mode.
 ///
@@ -209,4 +212,117 @@ fn build_meta(
         stdout_log,
         stderr_log,
     }
+}
+
+/// Entry point invoked by `scaler __finalize <id>` (the hidden subcommand
+/// that systemd runs via `ExecStopPost`). Reads env vars systemd injects
+/// (`SERVICE_RESULT`, `EXIT_CODE`, `EXIT_STATUS`), best-effort queries
+/// `systemctl --user show` for cumulative CPU/mem, and writes
+/// `result.json`. Always returns Ok — we never want a non-zero exit from
+/// the finalize hook to fail systemd's stop transition.
+pub fn finalize(run_id: &str) -> Result<()> {
+    let root = StateRoot::from_env()?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let show = run_systemctl_show_metrics(run_id).ok();
+    finalize_with_env(&root, run_id, &env, show.as_deref())
+}
+
+/// Pure core of `finalize`, exposed for unit/integration tests. Takes
+/// a state root, a run id string, an env map, and optional pre-fetched
+/// `systemctl show` output, and writes `result.json` to disk.
+pub fn finalize_with_env(
+    root: &StateRoot,
+    run_id: &str,
+    env: &HashMap<String, String>,
+    show_output: Option<&str>,
+) -> Result<()> {
+    let id = RunId::parse(run_id).ok_or_else(|| anyhow::anyhow!("invalid run id: {run_id}"))?;
+
+    // Sanity check: meta.json should exist for this id. If not, the
+    // finalize hook was called for a run we don't know about — still
+    // try to write result.json so the run shows up in status.
+    let _ = read_meta(root, &id);
+
+    let exit_code_label = env.get("EXIT_CODE").map(String::as_str).unwrap_or("");
+    let exit_status = env.get("EXIT_STATUS").and_then(|s| s.parse::<i32>().ok());
+
+    let (state, exit_code, signal) = match exit_code_label {
+        "exited" => (RunState::Exited, exit_status, None),
+        "killed" | "dumped" => {
+            let sig = exit_status.unwrap_or(0);
+            (
+                RunState::Killed,
+                Some(128 + sig),
+                Some(signal_name(sig).unwrap_or("signal").to_string()),
+            )
+        }
+        _ => (RunState::LaunchFailed, exit_status, None),
+    };
+
+    let (cpu_total_nanos, memory_peak_bytes) = parse_show_metrics(show_output);
+
+    let ended = OffsetDateTime::now_local()
+        .unwrap_or_else(|_| OffsetDateTime::now_utc().to_offset(UtcOffset::UTC))
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "unknown".into());
+
+    let result = RunResult {
+        version: 1,
+        id: id.as_str().to_string(),
+        ended,
+        state,
+        exit_code,
+        signal,
+        cpu_total_nanos,
+        memory_peak_bytes,
+        launch_error: None,
+    };
+    write_result(root, &id, &result)
+}
+
+fn run_systemctl_show_metrics(run_id: &str) -> Result<String> {
+    let unit = format!("scaler-run-{run_id}.service");
+    let out = Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            &unit,
+            "--property=CPUUsageNSec,MemoryPeak,ExecMainStartTimestamp,ExecMainExitTimestamp",
+        ])
+        .output()
+        .context("spawn systemctl show")?;
+    if !out.status.success() {
+        anyhow::bail!("systemctl show failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn parse_show_metrics(show: Option<&str>) -> (Option<u128>, Option<u64>) {
+    let Some(text) = show else {
+        return (None, None);
+    };
+    let mut cpu: Option<u128> = None;
+    let mut mem: Option<u64> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("CPUUsageNSec=") {
+            cpu = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("MemoryPeak=") {
+            mem = rest.trim().parse().ok();
+        }
+    }
+    (cpu, mem)
+}
+
+fn signal_name(signum: i32) -> Option<&'static str> {
+    Some(match signum {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        6 => "SIGABRT",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        _ => return None,
+    })
 }

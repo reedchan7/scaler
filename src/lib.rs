@@ -57,8 +57,17 @@ pub fn run() -> anyhow::Result<()> {
         crate::cli::args::Command::Status(_) => {
             anyhow::bail!("`scaler status` not wired yet (Task 11)");
         }
-        crate::cli::args::Command::Finalize { .. } => {
-            anyhow::bail!("`scaler __finalize` not wired yet (Task 7)");
+        crate::cli::args::Command::Finalize { id } => {
+            #[cfg(target_os = "linux")]
+            {
+                crate::detach::linux::finalize(&id)?;
+                return Ok(());
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = id;
+                anyhow::bail!("__finalize is only used on Linux");
+            }
         }
     }
 }
