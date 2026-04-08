@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod cli;
 pub mod core;
+pub mod detach;
 pub mod ui;
 
 pub fn run() -> anyhow::Result<()> {
