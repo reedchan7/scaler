@@ -93,3 +93,34 @@ fn finalize_hidden_subcommand_parses() {
     };
     assert_eq!(id, "20260408-143022-a1b2");
 }
+
+fn parse_shorthand(argv: &[&str]) -> anyhow::Result<Cli> {
+    // Exercises cli::parse_from → normalize_argv, which is what the real
+    // binary uses. Cli::try_parse_from alone bypasses normalization.
+    let raw: Vec<std::ffi::OsString> = std::iter::once("scaler")
+        .chain(argv.iter().copied())
+        .map(std::ffi::OsString::from)
+        .collect();
+    scaler::cli::parse_from(raw)
+}
+
+#[test]
+fn run_shorthand_normalizes_detach_short_flag() {
+    // `scaler -d -- echo hi` (without explicit `run` keyword) must
+    // normalize through is_run_shorthand_flag and parse as Run with detach=true.
+    let cli = parse_shorthand(&["-d", "--", "echo", "hi"]).unwrap();
+    let Command::Run(run) = cli.command else {
+        panic!("expected Run")
+    };
+    assert!(run.detach);
+}
+
+#[test]
+fn run_shorthand_normalizes_detach_long_flag() {
+    // Same for the long form.
+    let cli = parse_shorthand(&["--detach", "--", "echo", "hi"]).unwrap();
+    let Command::Run(run) = cli.command else {
+        panic!("expected Run")
+    };
+    assert!(run.detach);
+}
