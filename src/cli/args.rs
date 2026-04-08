@@ -38,6 +38,31 @@ Examples:
   # Live TUI dashboard for long-running jobs
   scaler --monitor --cpu 2c -- cargo build --release
 
+Detached examples:
+  scaler run --cpu 0.8c --mem 600m -d -- npm install --jobs=1
+      Launch in the background, print a run id, return immediately.
+
+  scaler status
+      List all runs (newest first).
+
+  scaler status 20260408-143022-a1b2
+      Show detail for one run (accepts unique id prefixes).
+
+  scaler status --json
+      Machine-readable output for scripting.
+
+Detached notes:
+  - Linux uses `systemd-run --no-block`; the unit continues after scaler exits.
+  - macOS uses double-fork; a grandchild process runs the command.
+  - State lives under $XDG_STATE_HOME/scaler/runs/ (default ~/.local/state/scaler/runs/).
+  - No automatic cleanup; remove stale runs with:
+      find ~/.local/state/scaler/runs -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} +
+  - To kill a running detached run:
+      systemctl --user stop scaler-run-<id>.service   # Linux
+      kill $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)   # macOS
+  - scaler does not limit disk I/O; I/O-bound workloads on small hosts may still saturate.
+  - Detached mode cannot combine with --monitor or --interactive always.
+
 See `scaler doctor` to check what limits your host can actually enforce.";
 
 #[derive(Parser, Debug)]

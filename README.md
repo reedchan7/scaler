@@ -200,6 +200,61 @@ make version VERSION=1.2.3    # set an explicit version
 
 CI runs `cargo fmt -- --check`, `cargo clippy --tests -- -D warnings`, `cargo test`, and `cargo build --release` on Linux x86_64, Linux ARM64, and macOS Apple Silicon. Tag a `vX.Y.Z` to ship a release; the workflow validates the tag matches `Cargo.toml`, builds the three target tarballs, generates checksums, and uploads everything to the matching GitHub Release.
 
+## Detached runs
+
+Long commands can be launched in the background and queried later. `scaler` does **not** become a daemon itself — on Linux the transient `systemd-run` unit is the supervisor, on macOS a double-forked grandchild process runs the command.
+
+```sh
+# Launch and return immediately. Prints the run id.
+scaler run --cpu 0.8c --mem 600m --detach -- npm install --jobs=1
+20260408-143022-a1b2
+
+# List all runs (newest first).
+scaler status
+20260408-143022-a1b2  exited(0)  52m18s  npm install --jobs=1
+
+# Detail for one run (exact id or unique prefix).
+scaler status 20260408-143022
+id:       20260408-143022-a1b2
+command:  npm install --jobs=1
+limits:   cpu=0.80c  mem=600 MiB
+backend:  linux_systemd (enforced)
+started:  2026-04-08T14:30:22+08:00
+ended:    2026-04-08T15:22:40+08:00
+state:    exited(0)
+memory:   peak 587 MiB
+stdout:   ~/.local/state/scaler/runs/20260408-143022-a1b2/stdout.log
+stderr:   ~/.local/state/scaler/runs/20260408-143022-a1b2/stderr.log
+
+# Machine-readable output.
+scaler status --json
+```
+
+### State directory
+
+Runs are stored under `$XDG_STATE_HOME/scaler/runs/` (default `~/.local/state/scaler/runs/` on both Linux and macOS). Each run has its own directory with `meta.json`, `result.json` (after exit), `stdout.log`, and `stderr.log`.
+
+There is no automatic cleanup. Remove stale runs manually:
+
+```sh
+find ~/.local/state/scaler/runs -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} +
+```
+
+### Killing a detached run
+
+`scaler` does not provide a `kill` subcommand in v1. Use platform tools:
+
+- **Linux:** `systemctl --user stop scaler-run-<id>.service`
+- **macOS:** `kill $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)`
+
+### Detached limitations
+
+- `scaler` does not limit disk I/O. On small hosts (e.g. 2c/2g VMs) a command that is I/O-bound (like `npm install`) can still saturate the system even when CPU and memory caps are enforced.
+- No push notifications. `scaler status` is pull-only; layer your own notifier on top if needed.
+- No crash recovery. If `scaler` or `systemd` dies between "service queued" and "`result.json` written", the run shows as `gone`. Check `stdout.log` / `stderr.log` to piece it together.
+- Paths containing spaces (e.g. a home directory with a space) are not escaped in systemd property strings; avoid spaces in `$HOME` on Linux if you use `--detach`.
+- `--detach` cannot combine with `--monitor` or `--interactive always`.
+
 ## Limitations
 
 - macOS limits are **best-effort only** — `taskpolicy` lowers scheduling priority but cannot hard-cap CPU or memory. `scaler doctor` reports this honestly so you don't get a false sense of safety.
