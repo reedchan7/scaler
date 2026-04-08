@@ -245,7 +245,10 @@ find ~/.local/state/scaler/runs -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf 
 `scaler` does not provide a `kill` subcommand in v1. Use platform tools:
 
 - **Linux:** `systemctl --user stop scaler-run-<id>.service`
-- **macOS:** `kill $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)`
+- **macOS:** `pkill -P $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)`
+  (kills the wrapped command — `meta.pid` is the scaler grandchild that
+  supervises it; killing the grandchild directly would leave the run in
+  the `gone` state with no `result.json`.)
 
 ### Detached limitations
 

@@ -58,8 +58,8 @@ Detached notes:
   - No automatic cleanup; remove stale runs with:
       find ~/.local/state/scaler/runs -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} +
   - To kill a running detached run:
-      systemctl --user stop scaler-run-<id>.service   # Linux
-      kill $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)   # macOS
+      systemctl --user stop scaler-run-<id>.service              # Linux
+      pkill -P $(jq -r .pid ~/.local/state/scaler/runs/<id>/meta.json)  # macOS
   - scaler does not limit disk I/O; I/O-bound workloads on small hosts may still saturate.
   - Detached mode cannot combine with --monitor or --interactive always.
 
