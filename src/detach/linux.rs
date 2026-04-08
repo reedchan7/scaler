@@ -18,9 +18,13 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
+use crate::cli::status::{LiveSnapshot, RunView};
 use crate::core::LaunchPlan;
 use crate::detach::id::RunId;
-use crate::detach::state::{Meta, RunResult, RunState, StateRoot, write_meta, write_result};
+use crate::detach::state::{
+    Meta, RunResult, RunState, StateRoot, list_run_ids, read_meta, read_result, write_meta,
+    write_result,
+};
 
 /// Build the argv vector for `systemd-run` in detach mode.
 ///
@@ -317,5 +321,96 @@ fn signal_name(signum: i32) -> Option<&'static str> {
         13 => "SIGPIPE",
         15 => "SIGTERM",
         _ => return None,
+    })
+}
+
+/// Return a unified `RunView` for one run. Prefers `result.json` as the
+/// source of truth (terminal state); falls back to `systemctl --user show`
+/// for a live snapshot; if neither is available, marks the run as `gone`.
+pub fn query_one(root: &StateRoot, id: &RunId) -> Result<RunView> {
+    let meta = read_meta(root, id)?;
+    if let Ok(result) = read_result(root, id) {
+        return Ok(RunView {
+            meta,
+            result: Some(result),
+            live: None,
+            gone: false,
+        });
+    }
+    if let Ok(show) = run_live_show(id)
+        && let Some(live) = parse_live_show(&show)
+    {
+        return Ok(RunView {
+            meta,
+            result: None,
+            live: Some(live),
+            gone: false,
+        });
+    }
+    Ok(RunView {
+        meta,
+        result: None,
+        live: None,
+        gone: true,
+    })
+}
+
+/// Return all runs in the state dir, newest first. Best-effort: runs whose
+/// meta.json fails to load are skipped with a stderr warning.
+pub fn query_all(root: &StateRoot) -> Result<Vec<RunView>> {
+    let ids = list_run_ids(root)?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        match query_one(root, &id) {
+            Ok(v) => out.push(v),
+            Err(e) => eprintln!("scaler status: skipping {}: {e:#}", id.as_str()),
+        }
+    }
+    Ok(out)
+}
+
+fn run_live_show(id: &RunId) -> Result<String> {
+    let unit = format!("scaler-run-{}.service", id.as_str());
+    let out = Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            &unit,
+            "--property=ActiveState,SubState,MainPID,CPUUsageNSec,MemoryCurrent,ActiveEnterTimestamp",
+        ])
+        .output()
+        .context("spawn systemctl show")?;
+    if !out.status.success() {
+        anyhow::bail!("systemctl show failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse the key=value output of `systemctl --user show` into a
+/// `LiveSnapshot`. Returns `None` when the unit is not currently active
+/// (caller should then report `gone`).
+pub fn parse_live_show(text: &str) -> Option<LiveSnapshot> {
+    let mut cpu: Option<u128> = None;
+    let mut mem: Option<u64> = None;
+    let mut active: Option<String> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("CPUUsageNSec=") {
+            cpu = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("MemoryCurrent=") {
+            mem = rest.trim().parse().ok();
+        } else if let Some(rest) = line.strip_prefix("ActiveState=") {
+            active = Some(rest.trim().to_string());
+        }
+    }
+    if active.as_deref() != Some("active") {
+        return None;
+    }
+    // elapsed_secs is deferred to a future task — computing it needs
+    // parsing systemd's free-form ActiveEnterTimestamp ("Wed 2026-04-08
+    // 14:30:22 UTC"). For v1 the detail renderer tolerates None.
+    Some(LiveSnapshot {
+        cpu_total_nanos: cpu,
+        memory_current_bytes: mem,
+        elapsed_secs: None,
     })
 }

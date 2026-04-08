@@ -41,3 +41,41 @@ fn platform_launch(_plan: &LaunchPlan, _root: &StateRoot) -> Result<RunId> {
 fn platform_launch(_plan: &LaunchPlan, _root: &StateRoot) -> Result<RunId> {
     anyhow::bail!("--detach is not supported on this platform")
 }
+
+pub fn query_one(root: &StateRoot, id: &RunId) -> Result<crate::cli::status::RunView> {
+    platform_query_one(root, id)
+}
+
+pub fn query_all(root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
+    platform_query_all(root)
+}
+
+#[cfg(target_os = "linux")]
+fn platform_query_one(root: &StateRoot, id: &RunId) -> Result<crate::cli::status::RunView> {
+    linux::query_one(root, id)
+}
+
+#[cfg(target_os = "linux")]
+fn platform_query_all(root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
+    linux::query_all(root)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_query_one(_root: &StateRoot, _id: &RunId) -> Result<crate::cli::status::RunView> {
+    anyhow::bail!("macOS status query not yet implemented (Task 9)")
+}
+
+#[cfg(target_os = "macos")]
+fn platform_query_all(_root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
+    anyhow::bail!("macOS status query not yet implemented (Task 9)")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn platform_query_one(_root: &StateRoot, _id: &RunId) -> Result<crate::cli::status::RunView> {
+    anyhow::bail!("scaler status is not supported on this platform")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn platform_query_all(_root: &StateRoot) -> Result<Vec<crate::cli::status::RunView>> {
+    anyhow::bail!("scaler status is not supported on this platform")
+}
