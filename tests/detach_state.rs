@@ -1,7 +1,7 @@
 use scaler::detach::id::RunId;
 use scaler::detach::state::{
-    Meta, Result as RunResult, RunState, StateRoot, list_run_ids, read_meta, read_result,
-    write_meta, write_result,
+    Meta, RunResult, RunState, StateRoot, list_run_ids, read_meta, read_result, write_meta,
+    write_result,
 };
 use tempfile::TempDir;
 

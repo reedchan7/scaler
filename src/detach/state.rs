@@ -91,7 +91,7 @@ pub enum RunState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Result {
+pub struct RunResult {
     pub version: u32,
     pub id: String,
     pub ended: String,
@@ -108,7 +108,7 @@ pub fn write_meta(root: &StateRoot, id: &RunId, meta: &Meta) -> AnyResult<()> {
     atomic_write_json(&root.meta_path(id), meta)
 }
 
-pub fn write_result(root: &StateRoot, id: &RunId, result: &Result) -> AnyResult<()> {
+pub fn write_result(root: &StateRoot, id: &RunId, result: &RunResult) -> AnyResult<()> {
     ensure_run_dir(root, id)?;
     atomic_write_json(&root.result_path(id), result)
 }
@@ -119,7 +119,7 @@ pub fn read_meta(root: &StateRoot, id: &RunId) -> AnyResult<Meta> {
     serde_json::from_slice(&bytes).with_context(|| format!("parse meta.json at {}", path.display()))
 }
 
-pub fn read_result(root: &StateRoot, id: &RunId) -> AnyResult<Result> {
+pub fn read_result(root: &StateRoot, id: &RunId) -> AnyResult<RunResult> {
     let path = root.result_path(id);
     let bytes =
         fs::read(&path).with_context(|| format!("read result.json at {}", path.display()))?;
