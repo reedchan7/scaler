@@ -54,6 +54,12 @@ pub fn run() -> anyhow::Result<()> {
             );
             Ok(())
         }
+        crate::cli::args::Command::Status(_) => {
+            anyhow::bail!("`scaler status` not wired yet (Task 11)");
+        }
+        crate::cli::args::Command::Finalize { .. } => {
+            anyhow::bail!("`scaler __finalize` not wired yet (Task 7)");
+        }
     }
 }
 

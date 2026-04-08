@@ -88,6 +88,16 @@ Print the scaler version and the OS/architecture target triple this binary \
 was built for, e.g. `scaler 0.4.0 macos-aarch64`. Useful when filing bug \
 reports.")]
     Version,
+
+    /// List detached runs or show detail for a single run.
+    Status(StatusCommand),
+
+    /// Internal finalize hook invoked by systemd ExecStopPost. Not for human use.
+    #[command(hide = true, name = "__finalize")]
+    Finalize {
+        /// Run id whose result.json should be written.
+        id: String,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -124,8 +134,31 @@ pub struct RunCommand {
     #[arg(long = "monitor", default_value_t = false, action = ArgAction::SetTrue)]
     pub monitor: bool,
 
+    /// Run the command in the background and return a run id immediately.
+    /// Use `scaler status <id>` to check progress. Incompatible with
+    /// `--monitor` and `--interactive always`.
+    #[arg(long, short = 'd', default_value_t = false, action = ArgAction::SetTrue)]
+    pub detach: bool,
+
     #[arg(last = true)]
     pub trailing: Vec<String>,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(
+    about = "List detached runs or show detail for a single run.",
+    long_about = "\
+List all detached runs under $XDG_STATE_HOME/scaler/runs/, or show detail \
+for a single run by id (exact match or unique prefix). Runs that are still \
+live are queried from systemd (Linux) or ps (macOS) on demand."
+)]
+pub struct StatusCommand {
+    /// Show detail for this run id (exact match or unique prefix).
+    pub id: Option<String>,
+
+    /// Machine-readable JSON output.
+    #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+    pub json: bool,
 }
 
 impl Cli {
@@ -144,6 +177,8 @@ impl Cli {
             Command::Run(_) => "run",
             Command::Doctor => "doctor",
             Command::Version => "version",
+            Command::Status(_) => "status",
+            Command::Finalize { .. } => "__finalize",
         }
     }
 
@@ -158,6 +193,18 @@ impl Cli {
 
 impl RunCommand {
     fn validate(&self) -> Result<(), clap::Error> {
+        if self.detach && self.monitor {
+            return Err(validation_error(
+                ErrorKind::ArgumentConflict,
+                "--detach cannot combine with --monitor",
+            ));
+        }
+        if self.detach && matches!(self.interactive, InteractiveModeArg::Always) {
+            return Err(validation_error(
+                ErrorKind::ArgumentConflict,
+                "--detach cannot combine with --interactive always",
+            ));
+        }
         match self.shell {
             Some(_) if self.trailing.len() != 1 => Err(validation_error(
                 ErrorKind::WrongNumberOfValues,
