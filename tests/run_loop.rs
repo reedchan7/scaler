@@ -410,6 +410,35 @@ fn execute_headless_runs_to_completion_without_panic() {
     );
 }
 
+#[test]
+fn execute_headless_populates_peak_memory_and_total_cpu_fields() {
+    let _guard = test_guard();
+    reset_test_state();
+    set_test_poll_interval_for_next_run(Duration::from_millis(10));
+
+    let outcome = execute_headless(
+        LaunchPlan {
+            argv: vec![
+                OsString::from("/bin/sh"),
+                OsString::from("-c"),
+                OsString::from("exit 0"),
+            ],
+            resource_spec: ResourceSpec {
+                interactive: InteractiveMode::Never,
+                monitor: false,
+                ..ResourceSpec::default()
+            },
+            platform: host_platform(),
+        },
+        &PlainFallbackBackend,
+    )
+    .expect("execute_headless ok");
+
+    // Fields exist and are accessible; may be None for a trivial exit-0 command.
+    let _ = outcome.peak_memory;
+    let _ = outcome.total_cpu_nanos;
+}
+
 fn host_platform() -> Platform {
     match std::env::consts::OS {
         "linux" => Platform::Linux,

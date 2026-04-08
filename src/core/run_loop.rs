@@ -335,6 +335,10 @@ fn execute_with_ui_mode(
                 host_logical_cores: crate::core::system_cpu::host_logical_cores(),
                 capabilities,
                 warnings,
+                // Platform backends that expose real CPU accounting (e.g. Linux
+                // via CPUUsageNSec) may eventually populate this through a
+                // dedicated backend method; for now it is None everywhere.
+                total_cpu_nanos: None,
             };
             if mode == UiMode::Foreground {
                 // Summary goes to stderr so user pipelines like

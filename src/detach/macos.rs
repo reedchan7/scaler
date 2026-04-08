@@ -263,8 +263,8 @@ fn to_result_json(
                 state: RunState::Exited,
                 exit_code: Some(code),
                 signal: None,
-                cpu_total_nanos: None, // Task 10 will wire peak_memory / cpu_nanos
-                memory_peak_bytes: None,
+                cpu_total_nanos: o.total_cpu_nanos,
+                memory_peak_bytes: o.peak_memory,
                 launch_error: None,
             };
         }
@@ -276,8 +276,8 @@ fn to_result_json(
                 state: RunState::Killed,
                 exit_code: Some(128 + sig),
                 signal: Some(macos_signal_name(sig).unwrap_or("signal").to_string()),
-                cpu_total_nanos: None,
-                memory_peak_bytes: None,
+                cpu_total_nanos: o.total_cpu_nanos,
+                memory_peak_bytes: o.peak_memory,
                 launch_error: None,
             };
         }

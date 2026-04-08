@@ -380,6 +380,7 @@ impl RunOutcome {
             host_logical_cores: None,
             capabilities: crate::core::CapabilityReport::fully_enforced_for_test(),
             warnings: Vec::new(),
+            total_cpu_nanos: None,
         }
     }
 }

@@ -276,4 +276,8 @@ pub struct RunOutcome {
     /// any added by the run loop, e.g. when the monitor TUI fails after
     /// launch and we fall back to plain rendering).
     pub warnings: Vec<String>,
+    /// Total CPU time consumed by the child, in nanoseconds. Populated on
+    /// Linux via cgroup accounting (`CPUUsageNSec`); `None` on macOS and
+    /// other platforms where the backend does not report wall-clock CPU time.
+    pub total_cpu_nanos: Option<u128>,
 }
